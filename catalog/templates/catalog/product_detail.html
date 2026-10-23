@@ -1,0 +1,3 @@
+{% extends "base.html" %}{% load static %}
+{% block title %}{{ product.name }} — {{ block.super }}{% endblock %}
+{% block content %}<a href="{{ product.category.get_absolute_url }}">← {{ product.category.name }}</a><div class="row mt-3"><div class="col-md-5"><img class="img-fluid product-photo" src="{% if product.image %}{{ product.image.url }}{% else %}{% static 'img/no-image.svg' %}{% endif %}" alt="{{ product.name }}"></div><div class="col-md-7"><h1 class="h3">{{ product.name }}</h1><p>{{ product.description|linebreaksbr }}</p><p class="price">{{ product.price|floatformat:"-2g" }} ₽</p>{% if product.in_stock %}<p class="text-success">В наличии: {{ product.stock }}</p>{% else %}<p class="text-danger">Нет в наличии</p>{% endif %}</div></div>{% endblock %}

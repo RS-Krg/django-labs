@@ -1,5 +1,7 @@
 from decimal import Decimal
+from pathlib import Path
 
+from django.core.files import File
 from django.core.management.base import BaseCommand
 
 from catalog.models import Category, Product
@@ -38,6 +40,11 @@ CATALOG = {
     ],
 }
 
+DEMO_IMAGES = {
+    'monitor-27-2k': 'monitor-27-2k.png',
+    'keyboard-mechanical': 'keyboard-mechanical.png',
+}
+
 
 class Command(BaseCommand):
     help = 'Заполняет каталог демонстрационными категориями и товарами'
@@ -47,9 +54,13 @@ class Command(BaseCommand):
         for (name, slug), rows in CATALOG.items():
             category, _ = Category.objects.get_or_create(slug=slug, defaults={'name': name})
             for product_name, product_slug, price, stock in rows:
-                _, is_new = Product.objects.get_or_create(slug=product_slug, defaults={
+                product, is_new = Product.objects.get_or_create(slug=product_slug, defaults={
                     'category': category, 'name': product_name, 'price': Decimal(price),
                     'stock': stock, 'description': 'Учебный товар. Описание заполняется в admin panel.',
                 })
                 created += is_new
+                if not product.image and product_slug in DEMO_IMAGES:
+                    image_path = Path(__file__).resolve().parents[2] / 'demo_images' / DEMO_IMAGES[product_slug]
+                    with image_path.open('rb') as image_file:
+                        product.image.save(DEMO_IMAGES[product_slug], File(image_file), save=True)
         self.stdout.write(self.style.SUCCESS(f'Готово. Новых товаров: {created}'))

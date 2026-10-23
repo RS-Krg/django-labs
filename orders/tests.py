@@ -1,5 +1,7 @@
 from decimal import Decimal
+from unittest.mock import Mock
 
+from django.contrib import admin
 from django.test import TestCase
 from django.urls import reverse
 
@@ -7,6 +9,7 @@ from accounts.models import User
 from catalog.models import Category, Product
 
 from .models import Order
+from .admin import OrderAdmin
 from .services import cancel_order
 
 ORDER_DATA = {'full_name': 'Анна Смирнова', 'phone': '+7 913 000-00-00', 'address': 'Новосибирск'}
@@ -87,3 +90,11 @@ class CheckoutTests(TestCase):
         self.assertFalse(cancel_order(order))
         self.product.refresh_from_db()
         self.assertEqual(self.product.stock, 5)
+
+    def test_manager_cannot_skip_status_transition(self):
+        order = Order.objects.create(user=self.buyer, **ORDER_DATA)
+        order_admin = OrderAdmin(Order, admin.site)
+        order_admin.message_user = Mock()
+        order_admin.mark_done(None, Order.objects.filter(pk=order.pk))
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.Status.NEW)

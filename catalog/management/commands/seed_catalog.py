@@ -41,6 +41,8 @@ SPORTS = {
 DEMO_IMAGES = {
     'tempo-shoes': 'tempo-shoes.png',
     'wind-jacket': 'wind-jacket.png',
+    'trail-boots': 'trail-boots.png',
+    'striker-boots': 'striker-boots.png',
 }
 
 

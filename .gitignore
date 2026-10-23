@@ -1,6 +1,17 @@
 .venv/
+venv/
 __pycache__/
 *.py[cod]
 db.sqlite3
 media/
 .env
+.env.*
+*.env
+*.pem
+*.key
+*.p12
+*.pfx
+*credentials*.json
+*secret*.json
+secrets.py
+local_settings.py

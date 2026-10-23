@@ -1,0 +1,20 @@
+{% extends "helpdesk/base.html" %}
+{% block title %}Заявка №{{ ticket.pk }} — {{ block.super }}{% endblock %}
+{% block content %}
+<a href="{% url 'ticket_list' %}">← ко всем заявкам</a>
+<h1 class="h3 mt-2 mb-4">Заявка №{{ ticket.pk }}: {{ ticket.title }}</h1>
+<div class="row"><div class="col-md-8"><dl class="row">
+  <dt class="col-sm-4">Статус</dt><dd class="col-sm-8">{{ ticket.get_status_display }}</dd>
+  <dt class="col-sm-4">Приоритет</dt><dd class="col-sm-8">{{ ticket.get_priority_display }}</dd>
+  <dt class="col-sm-4">Категория</dt><dd class="col-sm-8">{{ ticket.category|default:"не указана" }}</dd>
+  <dt class="col-sm-4">Кто обратился</dt><dd class="col-sm-8">{{ ticket.author }}</dd>
+  <dt class="col-sm-4">Зарегистрировал</dt><dd class="col-sm-8">{{ ticket.created_by|default:"—" }}</dd>
+  <dt class="col-sm-4">Исполнитель</dt><dd class="col-sm-8">{{ ticket.assignee|default:"не назначен" }}</dd>
+  <dt class="col-sm-4">Создана</dt><dd class="col-sm-8">{{ ticket.created_at|date:"d.m.Y H:i" }}</dd>
+  <dt class="col-sm-4">Изменена</dt><dd class="col-sm-8">{{ ticket.updated_at|date:"d.m.Y H:i" }}</dd>
+</dl><h2 class="h5">Описание</h2><p>{{ ticket.description|linebreaksbr|default:"—" }}</p>
+{% if can_edit %}<a class="btn btn-outline-primary" href="{% url 'ticket_update' ticket.pk %}">Редактировать</a>{% endif %}
+</div>
+{% if process_form %}<div class="col-md-4"><div class="card"><div class="card-header">Обработка заявки</div><div class="card-body"><form method="post" action="{% url 'ticket_process' ticket.pk %}">{% csrf_token %}{% include "helpdesk/_form_fields.html" with form=process_form %}<button class="btn btn-success" type="submit">Применить</button></form></div></div></div>{% endif %}
+</div>
+{% endblock %}

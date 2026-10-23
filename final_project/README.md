@@ -26,18 +26,18 @@ erDiagram
 
 ## Запуск на Windows
 
-Нужен Python 3.12 или новее. В PowerShell:
+Нужен Python 3.12 или новее. Из папки `C:\Django_Labs` (или из корня клонированного репозитория) в PowerShell:
 
 ```powershell
-cd final_project
+cd .\final_project
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe manage.py migrate
 .\.venv\Scripts\python.exe manage.py seed_demo
-.\.venv\Scripts\python.exe manage.py runserver
+.\.venv\Scripts\python.exe manage.py runserver 8002
 ```
 
-Открыть http://127.0.0.1:8000/. Проверки:
+Открыть http://127.0.0.1:8002/. Если вы уже находитесь в папке `final_project`, строку `cd .\final_project` пропустите. Это магазин спорттоваров; магазин техники находится в `shop`. Для остановки сервера нажмите `Ctrl+C` в том же окне PowerShell. Проверки:
 
 ```powershell
 .\.venv\Scripts\python.exe manage.py check

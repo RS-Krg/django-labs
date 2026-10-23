@@ -1,0 +1,388 @@
+[Title] Лабораторная работа №0.1: Прототип информационной системы на Django — учёт заявок ИТ-отдела
+[Normal] Продолжительность: ~3–3,5 часа (2 семинара; что не успели на занятии, доделывается дома)
+[Normal] Цель: довести учебное приложение helpdesk из лабораторной №0 до работающего прототипа информационной системы. Пользователи входят под своими учётными записями, сотрудники регистрируют заявки через формы на сайте, ИТ-отдел их обрабатывает, у каждой роли свои права, а основные сценарии проверяются автоматическими тестами.
+[Normal] Что понадобится: проект helpdesk в том состоянии, в котором его оставила лабораторная №0: окружение venv с Django, приложение helpdesk, модель Ticket, admin panel, страница /tickets/. Доступ в интернет нужен только для подключения стилей Bootstrap; без него прототип тоже работает, просто выглядит проще.
+[Normal] Все команды выполняются в папке проекта при активированном окружении ((venv) в начале строки). Как вернуться к проекту, описано в части 6 лабораторной №0. Команды одинаковы для Windows, Linux и macOS, кроме активации окружения.
+[Heading 1] Часть 1. Теория (≈15 мин)
+[Heading 2] 1.1 Что такое прототип и зачем он корпоративной ИС
+[Normal] Прототип — это работающая версия системы, на которой видно главное: какие данные хранятся, кто и что с ними делает, как выглядит основной сценарий работы. Его показывают заказчику, чтобы до больших затрат проверить, правильно ли поняты требования. Ошибку в модели данных или в правах доступа дешевле всего найти на прототипе: исправить её в готовой системе с фронтендом на React, контейнерами и CI/CD будет в разы дороже.
+[Normal] Django удобен для прототипов: модели, admin panel, формы, вход в систему и права доступа уже есть «из коробки». Работающий прототип собирается за один-два дня.
+[Normal] Прототип не обязательно выбрасывают. Модели, права и тесты из этой лабы почти без изменений переживут переход на PostgreSQL и REST API. Заменятся в основном HTML-шаблоны: в блоке React интерфейс уйдёт во фронтенд.
+[Heading 2] 1.2 Сценарий прототипа
+[TABLE]
+Роль | Что делает в системе
+Сотрудник (любой работник университета) | входит в систему, регистрирует заявку, видит только свои заявки, может исправить заявку, пока её не взяли в работу
+ИТ-специалист (группа «ИТ-отдел») | видит все заявки, ищет и фильтрует их, назначает исполнителя, меняет статус
+Администратор | ведёт справочники (категории заявок) и учётные записи через admin panel
+[/TABLE]
+[Normal] Такая таблица и есть минимальное техническое задание для прототипа. Каждая строка превратится в код и в тест.
+[Heading 2] 1.3 Формы и цикл GET/POST
+[Normal] Работа с любой формой на сайте устроена одинаково:
+[Normal] 1. GET — браузер просит страницу, сервер отдаёт пустую (или заполненную текущими данными) форму.
+[Normal] 2. POST — пользователь нажал «Сохранить», браузер отправляет введённые данные.
+[Normal] 3. Сервер проверяет данные (валидация). Если есть ошибки, он снова показывает ту же форму с введёнными значениями и сообщениями об ошибках.
+[Normal] 4. Если всё верно, сервер сохраняет данные и отвечает перенаправлением (redirect) на другую страницу.
+[Normal] Последний шаг называется Post/Redirect/Get. Без него после сохранения браузер остаётся на ответе POST-запроса, и нажатие F5 отправит форму повторно: появится дубль заявки.
+[Normal] В Django для этого есть ModelForm: форма, которая строится по модели. Поля, их типы, обязательность и проверки длины Django берёт из модели, а сохранение выполняет одной командой form.save().
+[Normal] Каждая POST-форма в Django должна содержать {% csrf_token %}. Это защита от CSRF-атаки: чужой сайт не сможет незаметно отправить форму от имени пользователя, который сейчас вошёл в нашу систему. Без токена Django отвечает ошибкой 403.
+[Heading 2] 1.4 Аутентификация и авторизация
+[List Bullet] Аутентификация — кто ты? Проверка логина и пароля, вход и выход.
+[List Bullet] Авторизация — что тебе можно? Проверка прав на конкретное действие.
+[Normal] Что для этого есть в Django:
+[TABLE]
+Механизм | Назначение
+User | учётная запись: логин, пароль (хранится в виде хеша), ФИО, флаги is_staff и is_superuser
+Permission | право на действие с моделью. Для каждой модели Django сам создаёт четыре права: add_, change_, delete_, view_
+Group | группа пользователей с набором прав. Права выдают группе, а людей включают в группы
+@login_required | view доступен только вошедшим, остальных перенаправляет на страницу входа
+@permission_required | view доступен только пользователям с указанным правом
+user.has_perm("app.codename") | проверка права в коде
+[/TABLE]
+[Normal] Стандартные права работают на уровне всей модели: «может изменять заявки». Правило «сотрудник видит только свои заявки» относится к конкретным записям, и встроенных прав для этого нет. Такие правила реализуют фильтрацией выборки: сотруднику просто не попадают в запрос чужие записи.
+[Heading 1] Часть 2. Практика — базовый шаблон и навигация (≈15 мин)
+[Normal] Что делаем и зачем: у всех страниц прототипа будут общие шапка, меню и место для сообщений. Чтобы не копировать этот HTML в каждый шаблон, выносим его в базовый шаблон, а страницы будут его наследовать.
+[Normal] 0. Перед началом зафиксировать результат лабораторной №0 в Git, чтобы к нему всегда можно было вернуться. Файл .gitignore создан в части 6 лабы №0:
+[TABLE]
+git init / git add . / git commit -m "Лабораторная 0: helpdesk"
+[/TABLE]
+[Normal] Если Git уже был инициализирован, достаточно git add . и git commit. Дальше советуем делать коммит после каждой части.
+[Normal] 1. Создать helpdesk/templates/helpdesk/base.html:
+[TABLE]
+<!DOCTYPE html> / <html lang="ru"> / <head> /   <meta charset="utf-8"> /   <meta name="viewport" content="width=device-width, initial-scale=1"> /   <title>{% block title %}Заявки ИТ-отдела{% endblock %}</title> /   <link rel="stylesheet" /         href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"> / </head> / <body> /   <nav class="navbar navbar-expand navbar-dark bg-primary mb-4"> /     <div class="container"> /       <a class="navbar-brand" href="{% url 'ticket_list' %}">ИТ-отдел</a> /       <div class="navbar-nav me-auto"> /         <a class="nav-link" href="{% url 'ticket_list' %}">Заявки</a> /       </div> /     </div> /   </nav> /  /   <main class="container"> /     {% for message in messages %} /       <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %}"> /         {{ message }} /       </div> /     {% endfor %} /  /     {% block content %}{% endblock %} /   </main> / </body> / </html>
+[/TABLE]
+[TABLE]
+Элемент | Что означает
+{% block имя %}...{% endblock %} | место, которое дочерний шаблон может заменить своим содержимым
+{% url 'ticket_list' %} | адрес по имени маршрута (name= в urls.py). Если адрес в urls.py поменяется, ссылки менять не придётся
+messages | одноразовые сообщения «Заявка сохранена» и т.п., показываются один раз после redirect. Подключены в новом проекте по умолчанию, сами сообщения появятся в части 6
+Bootstrap | готовый набор CSS-стилей: классы container, navbar, table, btn сразу дают аккуратный вид без своего CSS
+[/TABLE]
+[Normal] 2. Переписать helpdesk/templates/helpdesk/ticket_list.html так, чтобы он наследовал базовый шаблон. Вся «обвязка» (<html>, <head>, <body>) теперь в base.html:
+[TABLE]
+{% extends "helpdesk/base.html" %} /  / {% block title %}Список заявок — {{ block.super }}{% endblock %} /  / {% block content %} /   <h1 class="h3 mb-3">Заявки</h1> /   <p class="text-muted">Всего заявок: {{ tickets|length }}</p> /   <table class="table table-hover"> /     <thead> /       <tr><th>Тема</th><th>Кто обратился</th><th>Статус</th><th>Создана</th></tr> /     </thead> /     <tbody> /       {% for ticket in tickets %} /         <tr> /           <td>{{ ticket.title }}</td> /           <td>{{ ticket.author }}</td> /           <td>{{ ticket.get_status_display }}</td> /           <td>{{ ticket.created_at|date:"d.m.Y H:i" }}</td> /         </tr> /       {% empty %} /         <tr><td colspan="4" class="text-center text-muted">Заявок пока нет</td></tr> /       {% endfor %} /     </tbody> /   </table> / {% endblock %}
+[/TABLE]
+[Normal] {% extends %} должен быть первой строкой шаблона. {{ block.super }} подставляет содержимое блока из родителя, поэтому заголовок вкладки браузера станет «Список заявок — Заявки ИТ-отдела».
+[Normal] 3. Чтобы главная страница сайта не отвечала 404, перенаправить её на список заявок. В helpdesk/urls.py:
+[TABLE]
+from django.urls import path / from django.views.generic import RedirectView /  / from . import views /  / urlpatterns = [ /     path("", RedirectView.as_view(pattern_name="ticket_list"), name="home"), /     path("hello/", views.hello, name="hello"), /     path("tickets/", views.ticket_list, name="ticket_list"), / ]
+[/TABLE]
+[Normal] 4. Открыть http://127.0.0.1:8000/: браузер перейдёт на /tickets/, где теперь синяя шапка и оформленная таблица. Если стили не подгрузились (нет интернета или CDN заблокирован), страница выглядит как в лабе №0, но работает. На функциональность прототипа это не влияет.
+[Heading 1] Часть 3. Практика — расширяем модель данных (≈20 мин)
+[Normal] Что делаем и зачем: модели из лабы №0 мало для реальной работы. Нужны категории (справочник), приоритет, подробное описание, а главное — связь заявки с пользователями: кто зарегистрировал и кто исполняет.
+[Normal] 1. Заменить содержимое helpdesk/models.py:
+[TABLE]
+from django.conf import settings / from django.db import models /  /  / class Category(models.Model): /     name = models.CharField("Название", max_length=100, unique=True) /  /     class Meta: /         verbose_name = "категория" /         verbose_name_plural = "категории" /         ordering = ["name"] /  /     def __str__(self): /         return self.name /  /  / class Ticket(models.Model): /     class Status(models.TextChoices): /         NEW = "new", "Новая" /         IN_PROGRESS = "in_progress", "В работе" /         DONE = "done", "Выполнена" /  /     class Priority(models.TextChoices): /         LOW = "low", "Низкий" /         NORMAL = "normal", "Обычный" /         HIGH = "high", "Высокий" /  /     title = models.CharField("Тема", max_length=200) /     author = models.CharField("Кто обратился", max_length=100) /     description = models.TextField("Описание", blank=True) /     category = models.ForeignKey( /         Category, /         verbose_name="Категория", /         on_delete=models.PROTECT, /         null=True, /         blank=True, /         related_name="tickets", /     ) /     priority = models.CharField( /         "Приоритет", max_length=10, choices=Priority.choices, default=Priority.NORMAL /     ) /     status = models.CharField( /         "Статус", max_length=20, choices=Status.choices, default=Status.NEW /     ) /     created_by = models.ForeignKey( /         settings.AUTH_USER_MODEL, /         verbose_name="Зарегистрировал", /         on_delete=models.SET_NULL, /         null=True, /         blank=True, /         related_name="created_tickets", /     ) /     assignee = models.ForeignKey( /         settings.AUTH_USER_MODEL, /         verbose_name="Исполнитель", /         on_delete=models.SET_NULL, /         null=True, /         blank=True, /         related_name="assigned_tickets", /     ) /     created_at = models.DateTimeField("Создана", auto_now_add=True) /     updated_at = models.DateTimeField("Изменена", auto_now=True) /  /     class Meta: /         verbose_name = "заявка" /         verbose_name_plural = "заявки" /  /     def __str__(self): /         return self.title
+[/TABLE]
+[TABLE]
+Элемент | Что означает
+ForeignKey(Category, ...) | связь «многие к одному»: у заявки одна категория, у категории много заявок. В БД — столбец category_id
+on_delete=models.PROTECT | нельзя удалить категорию, пока на неё ссылается хоть одна заявка
+on_delete=models.SET_NULL | если удалить пользователя, заявки останутся, а ссылка на него обнулится. Требует null=True
+null=True / blank=True | null — в БД разрешено пустое значение; blank — в формах поле можно не заполнять
+settings.AUTH_USER_MODEL | ссылка на модель пользователя через настройку, а не напрямую на User. Если позже заменить модель пользователя на свою (как в лабе №3), эти связи менять не придётся
+related_name="created_tickets" | имя обратной связи: user.created_tickets.all() — заявки, которые зарегистрировал пользователь. Две связи на одну модель обязаны иметь разные related_name, иначе makemigrations выдаст ошибку
+auto_now=True | поле обновляется при каждом сохранении записи (в отличие от auto_now_add, которое заполняется один раз)
+class Meta: verbose_name | название модели для людей: в admin panel будет «Заявки», а не «Tickets»
+[/TABLE]
+[Normal] Поле author («Кто обратился») оставляем: заявку могут принять по телефону, и тогда зарегистрировал её ИТ-специалист, а обратился другой человек.
+[Normal] 2. Создать и применить миграцию:
+[TABLE]
+python manage.py makemigrations helpdesk / python manage.py migrate
+[/TABLE]
+[Normal] Все новые поля либо необязательные (null=True, blank=True), либо имеют значение по умолчанию, поэтому Django не задаёт вопросов: уже существующие заявки из лабы №0 получают пустую категорию, приоритет «Обычный» и т.д.
+[Normal] 3. Посмотреть SQL миграции:
+[TABLE]
+python manage.py sqlmigrate helpdesk 0002
+[/TABLE]
+[Normal] Номер 0002 проверьте по имени файла в helpdesk/migrations/. Обратите внимание: SQLite не умеет многие виды ALTER TABLE, поэтому Django для неё создаёт новую таблицу new__helpdesk_ticket, копирует туда данные и удаляет старую. В PostgreSQL та же миграция превратится в простые ALTER TABLE ... ADD COLUMN.
+[Normal] 4. Обновить helpdesk/admin.py:
+[TABLE]
+from django.contrib import admin /  / from .models import Category, Ticket /  /  / @admin.register(Category) / class CategoryAdmin(admin.ModelAdmin): /     search_fields = ("name",) /  /  / @admin.register(Ticket) / class TicketAdmin(admin.ModelAdmin): /     list_display = ( /         "title", "author", "category", "priority", "status", "assignee", "created_at", /     ) /     list_filter = ("status", "priority", "category") /     search_fields = ("title", "author", "description") /     list_select_related = ("category", "assignee")
+[/TABLE]
+[Normal] list_select_related загружает категорию и исполнителя тем же SQL-запросом, что и сами заявки. Без него Django делал бы отдельный запрос на каждую строку списка (проблема N+1, подробно разбирается в лабе №3).
+[Normal] 5. В admin panel завести категории: «Оборудование», «Программы», «Доступы и учётные записи», «Сеть и интернет». У пары существующих заявок проставить категорию и описание.
+[Heading 1] Часть 4. Практика — страница заявки (≈15 мин)
+[Normal] Что делаем и зачем: у каждой заявки появляется своя страница со всеми полями. На неё будут вести ссылки из списка, на неё же будем возвращаться после сохранения формы.
+[Normal] 1. Добавить в модель Ticket (в конец класса, после __str__) метод, который возвращает адрес страницы заявки, и импорт reverse в начало файла:
+[TABLE]
+from django.urls import reverse
+[/TABLE]
+[TABLE]
+def get_absolute_url(self): /     return reverse("ticket_detail", args=[self.pk])
+[/TABLE]
+[Normal] reverse — то же самое, что {% url %} в шаблонах, только в Python-коде: по имени маршрута и параметрам строит адрес /tickets/5/. Метод get_absolute_url — соглашение Django: его используют redirect(ticket), кнопка «Смотреть на сайте» в admin panel и наши шаблоны.
+[Normal] 2. Обновить helpdesk/views.py:
+[TABLE]
+from django.http import HttpResponse / from django.shortcuts import get_object_or_404, render /  / from .models import Ticket /  /  / def hello(request): /     return HttpResponse("Привет! Это учёт заявок ИТ-отдела.") /  /  / def ticket_list(request): /     tickets = Ticket.objects.select_related("category", "assignee").order_by("-created_at") /     return render(request, "helpdesk/ticket_list.html", {"tickets": tickets}) /  /  / def ticket_detail(request, pk): /     ticket = get_object_or_404(Ticket, pk=pk) /     return render(request, "helpdesk/ticket_detail.html", {"ticket": ticket})
+[/TABLE]
+[Normal] get_object_or_404 ищет запись и, если её нет, отвечает страницей «404 Не найдено» вместо падения с ошибкой DoesNotExist.
+[Normal] 3. Добавить маршрут в helpdesk/urls.py:
+[TABLE]
+path("tickets/<int:pk>/", views.ticket_detail, name="ticket_detail"),
+[/TABLE]
+[Normal] <int:pk> — конвертер пути: часть адреса должна быть целым числом, Django передаст её во view параметром pk. Адрес /tickets/abc/ даже не дойдёт до view, сразу будет 404.
+[Normal] 4. Создать helpdesk/templates/helpdesk/ticket_detail.html:
+[TABLE]
+{% extends "helpdesk/base.html" %} /  / {% block title %}Заявка №{{ ticket.pk }} — {{ block.super }}{% endblock %} /  / {% block content %} /   <a href="{% url 'ticket_list' %}">← ко всем заявкам</a> /   <h1 class="h3 mt-2 mb-4">Заявка №{{ ticket.pk }}: {{ ticket.title }}</h1> /  /   <div class="row"> /     <div class="col-md-8"> /       <dl class="row"> /         <dt class="col-sm-4">Статус</dt> /         <dd class="col-sm-8">{{ ticket.get_status_display }}</dd> /         <dt class="col-sm-4">Приоритет</dt> /         <dd class="col-sm-8">{{ ticket.get_priority_display }}</dd> /         <dt class="col-sm-4">Категория</dt> /         <dd class="col-sm-8">{{ ticket.category|default:"не указана" }}</dd> /         <dt class="col-sm-4">Кто обратился</dt> /         <dd class="col-sm-8">{{ ticket.author }}</dd> /         <dt class="col-sm-4">Зарегистрировал</dt> /         <dd class="col-sm-8">{{ ticket.created_by|default:"—" }}</dd> /         <dt class="col-sm-4">Исполнитель</dt> /         <dd class="col-sm-8">{{ ticket.assignee|default:"не назначен" }}</dd> /         <dt class="col-sm-4">Создана</dt> /         <dd class="col-sm-8">{{ ticket.created_at|date:"d.m.Y H:i" }}</dd> /         <dt class="col-sm-4">Изменена</dt> /         <dd class="col-sm-8">{{ ticket.updated_at|date:"d.m.Y H:i" }}</dd> /       </dl> /  /       <h2 class="h5">Описание</h2> /       <p>{{ ticket.description|linebreaksbr|default:"—" }}</p> /     </div> /   </div> / {% endblock %}
+[/TABLE]
+[Normal] Фильтр linebreaksbr превращает переносы строк из описания в <br>, иначе текст склеится в одну строку. default выводит запасной текст, если значение пустое.
+[Normal] 5. Заменить содержимое ticket_list.html: таблица с новыми полями и ссылкой на страницу заявки:
+[TABLE]
+{% extends "helpdesk/base.html" %} /  / {% block title %}Список заявок — {{ block.super }}{% endblock %} /  / {% block content %} /   <h1 class="h3 mb-3">Заявки</h1> /   <p class="text-muted">Найдено заявок: {{ tickets|length }}</p> /   <table class="table table-hover"> /     <thead> /       <tr> /         <th>№</th><th>Тема</th><th>Категория</th><th>Приоритет</th> /         <th>Статус</th><th>Исполнитель</th><th>Создана</th> /       </tr> /     </thead> /     <tbody> /       {% for ticket in tickets %} /         <tr> /           <td>{{ ticket.pk }}</td> /           <td><a href="{{ ticket.get_absolute_url }}">{{ ticket.title }}</a></td> /           <td>{{ ticket.category|default:"—" }}</td> /           <td>{{ ticket.get_priority_display }}</td> /           <td>{{ ticket.get_status_display }}</td> /           <td>{{ ticket.assignee|default:"—" }}</td> /           <td>{{ ticket.created_at|date:"d.m.Y H:i" }}</td> /         </tr> /       {% empty %} /         <tr><td colspan="7" class="text-center text-muted">Заявок нет</td></tr> /       {% endfor %} /     </tbody> /   </table> / {% endblock %}
+[/TABLE]
+[Normal] 6. Проверить: щёлкнуть по теме заявки в списке, открыть адрес несуществующей заявки (например, /tickets/999/) и убедиться, что получаем 404.
+[Heading 1] Часть 5. Практика — вход в систему и роли (≈30 мин)
+[Normal] Что делаем и зачем: пока любой, кто знает адрес, видит все заявки. Закрываем систему логином и разводим права: сотрудник видит только свои заявки, ИТ-отдел видит все.
+[Normal] 1. Подключить готовые view входа и выхода Django. В config/urls.py:
+[TABLE]
+from django.contrib import admin / from django.urls import include, path /  / urlpatterns = [ /     path("admin/", admin.site.urls), /     path("accounts/", include("django.contrib.auth.urls")), /     path("", include("helpdesk.urls")), / ]
+[/TABLE]
+[Normal] Строка include("django.contrib.auth.urls") добавляет сразу несколько маршрутов: login, logout, смену и сброс пароля. Писать view для них не нужно, только шаблон страницы входа.
+[Normal] 2. В конец config/settings.py добавить, куда отправлять пользователя:
+[TABLE]
+LOGIN_URL = "login" / LOGIN_REDIRECT_URL = "ticket_list" / LOGOUT_REDIRECT_URL = "login"
+[/TABLE]
+[TABLE]
+Настройка | Что означает
+LOGIN_URL | куда @login_required перенаправляет того, кто не вошёл (можно указать имя маршрута)
+LOGIN_REDIRECT_URL | куда перейти после входа, если в адресе нет параметра ?next=
+LOGOUT_REDIRECT_URL | куда перейти после выхода
+[/TABLE]
+[Normal] 3. Создать шаблон страницы входа helpdesk/templates/registration/login.html. Обратите внимание: папка registration, а не helpdesk. Именно там стандартный view входа ищет шаблон:
+[TABLE]
+{% extends "helpdesk/base.html" %} /  / {% block title %}Вход — {{ block.super }}{% endblock %} /  / {% block content %} /   <div class="row justify-content-center"> /     <div class="col-md-5"> /       <h1 class="h3 mb-3">Вход в систему</h1> /       {% if form.errors %} /         <div class="alert alert-danger">Неверное имя пользователя или пароль.</div> /       {% endif %} /       <form method="post"> /         {% csrf_token %} /         <div class="mb-3"> /           <label class="form-label" for="id_username">Имя пользователя</label> /           <input class="form-control" type="text" name="username" id="id_username" /                  value="{{ form.username.value|default:'' }}" autofocus required> /         </div> /         <div class="mb-3"> /           <label class="form-label" for="id_password">Пароль</label> /           <input class="form-control" type="password" name="password" id="id_password" required> /         </div> /         <input type="hidden" name="next" value="{{ next }}"> /         <button class="btn btn-primary" type="submit">Войти</button> /       </form> /     </div> /   </div> / {% endblock %}
+[/TABLE]
+[Normal] Скрытое поле next хранит адрес страницы, которую пользователь пытался открыть до входа. После входа он попадёт именно туда.
+[Normal] 4. Добавить в шапку base.html имя пользователя и кнопку выхода. Блок <div class="navbar-nav me-auto">...</div> заменить на:
+[TABLE]
+{% if user.is_authenticated %} /   <div class="navbar-nav me-auto"> /     <a class="nav-link" href="{% url 'ticket_list' %}">Заявки</a> /   </div> /   <span class="navbar-text text-white me-3"> /     {{ user.get_full_name|default:user.username }} /   </span> /   <form method="post" action="{% url 'logout' %}"> /     {% csrf_token %} /     <button class="btn btn-outline-light btn-sm" type="submit">Выйти</button> /   </form> / {% endif %}
+[/TABLE]
+[Normal] Выход — это форма с POST, а не ссылка. Начиная с Django 5 выход по GET-запросу запрещён (ответ 405): иначе любой сайт мог бы «разлогинить» пользователя, вставив картинку с адресом /accounts/logout/.
+[Normal] 5. Закрыть view логином и ограничить видимость заявок. Обновить helpdesk/views.py:
+[TABLE]
+from django.contrib.auth.decorators import login_required / from django.http import HttpResponse / from django.shortcuts import get_object_or_404, render /  / from .models import Ticket /  /  / def visible_tickets(user): /     """Заявки, которые пользователь имеет право видеть.""" /     tickets = Ticket.objects.select_related("category", "assignee", "created_by") /     if user.has_perm("helpdesk.change_ticket"): /         return tickets /     return tickets.filter(created_by=user) /  /  / def hello(request): /     return HttpResponse("Привет! Это учёт заявок ИТ-отдела.") /  /  / @login_required / def ticket_list(request): /     tickets = visible_tickets(request.user).order_by("-created_at") /     return render(request, "helpdesk/ticket_list.html", {"tickets": tickets}) /  /  / @login_required / def ticket_detail(request, pk): /     ticket = get_object_or_404(visible_tickets(request.user), pk=pk) /     return render(request, "helpdesk/ticket_detail.html", {"ticket": ticket})
+[/TABLE]
+[Normal] Главное здесь — функция visible_tickets. Правило доступа записано в одном месте, и все view берут заявки только через неё. В get_object_or_404 передаётся уже отфильтрованная выборка, поэтому чужую заявку сотрудник не откроет, даже подставив её номер в адрес: получит 404. Ответ 404, а не 403, выбран намеренно: так система не раскрывает, что заявка с таким номером вообще существует.
+[Normal] 6. Создать группу и пользователей в admin panel (/admin/, под суперпользователем):
+[List Bullet] Группы → Добавить: название ИТ-отдел, права Helpdesk | заявка | Can view ticket и Helpdesk | заявка | Can change ticket. Названия прав Django записал в базу по-английски ещё в лабе №0, а название модели показывает по-русски из verbose_name.
+[List Bullet] Пользователи → Добавить: ivanov (сотрудник) и petrov (ИТ-специалист). После сохранения заполнить имя и фамилию, а petrov включить в группу ИТ-отдел. Флаг «Статус персонала» (is_staff) не ставить: он даёт вход в admin panel, а нашим пользователям нужен только сайт.
+[Normal] То же самое можно сделать из python manage.py shell:
+[TABLE]
+from django.contrib.auth.models import Group, Permission, User /  / it, _ = Group.objects.get_or_create(name="ИТ-отдел") / it.permissions.add(*Permission.objects.filter( /     content_type__app_label="helpdesk", codename__in=["view_ticket", "change_ticket"] / )) / User.objects.create_user("ivanov", password="Zayavka-2026", first_name="Иван", last_name="Иванов") / petrov = User.objects.create_user("petrov", password="Zayavka-2026", first_name="Пётр", last_name="Петров") / petrov.groups.add(it)
+[/TABLE]
+[Normal] 7. Проверить роли. Удобнее всего открыть второе окно браузера в режиме «инкогнито»: в нём будет отдельная сессия, и можно одновременно быть разными пользователями.
+[List Bullet] Без входа открыть /tickets/: перебросит на /accounts/login/?next=/tickets/.
+[List Bullet] Войти как ivanov: список пуст. Заявки из лабы №0 никто не регистрировал (created_by пустой), поэтому сотруднику они не видны. Это правильное поведение.
+[List Bullet] Войти как petrov: видны все заявки.
+[List Bullet] Суперпользователь видит все заявки: у него есть все права без явной выдачи.
+[Heading 1] Часть 6. Практика — формы: создание и редактирование заявки (≈35 мин)
+[Normal] Что делаем и зачем: главный сценарий прототипа: сотрудник сам регистрирует заявку на сайте и может исправить её, пока ИТ-отдел не взял её в работу.
+[Normal] 1. Создать файл helpdesk/forms.py:
+[TABLE]
+from django import forms /  / from .models import Ticket /  /  / class BootstrapFormMixin: /     """Добавляет полям формы CSS-классы Bootstrap.""" /  /     def __init__(self, *args, **kwargs): /         super().__init__(*args, **kwargs) /         for field in self.fields.values(): /             if isinstance(field.widget, forms.Select): /                 field.widget.attrs["class"] = "form-select" /             else: /                 field.widget.attrs["class"] = "form-control" /  /  / class TicketForm(BootstrapFormMixin, forms.ModelForm): /     class Meta: /         model = Ticket /         fields = ["title", "author", "category", "priority", "description"] /         widgets = { /             "description": forms.Textarea(attrs={"rows": 5}), /         } /         help_texts = { /             "author": "ФИО или подразделение, от которого пришла заявка", /         } /  /     def __init__(self, *args, **kwargs): /         super().__init__(*args, **kwargs) /         self.fields["category"].empty_label = "— не выбрана —" /  /     def clean_title(self): /         title = self.cleaned_data["title"].strip() /         if len(title) < 5: /             raise forms.ValidationError("Сформулируйте тему хотя бы в 5 символов.") /         return title
+[/TABLE]
+[TABLE]
+Элемент | Что означает
+Meta.fields | какие поля модели попадут в форму. Поля status, created_by, assignee сотрудник заполнять не должен, поэтому их здесь нет. Перечислять поля явно безопаснее, чем fields = "__all__": новое поле модели не окажется в форме случайно
+widgets | как поле выглядит в HTML. По умолчанию TextField и так даёт <textarea>, здесь мы только задаём высоту
+clean_<поле>() | своя проверка конкретного поля. Вызывается после стандартных проверок; ошибка ValidationError будет показана под полем
+empty_label | текст пустого варианта в выпадающем списке. В Django 6.1 он по умолчанию «- Select an option -» и на русский не переведён, поэтому задаём сами
+BootstrapFormMixin | примесь, которая проставляет всем полям CSS-классы Bootstrap. Без неё форма работает так же, только без оформления
+[/TABLE]
+[Normal] 2. Создать шаблон полей формы, который пригодится в нескольких местах, helpdesk/templates/helpdesk/_form_fields.html (подчёркивание в имени — договорённость: это фрагмент, а не самостоятельная страница):
+[TABLE]
+{% for error in form.non_field_errors %} /   <div class="alert alert-danger">{{ error }}</div> / {% endfor %} /  / {% for field in form %} /   <div class="mb-3"> /     <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label> /     {{ field }} /     {% if field.help_text %} /       <div class="form-text">{{ field.help_text }}</div> /     {% endif %} /     {% for error in field.errors %} /       <div class="text-danger small">{{ error }}</div> /     {% endfor %} /   </div> / {% endfor %}
+[/TABLE]
+[Normal] Можно было бы вывести форму одной строкой {{ form }}, но перебор полей вручную позволяет расположить подписи, подсказки и ошибки так, как нужно.
+[Normal] 3. Создать шаблон страницы с формой helpdesk/templates/helpdesk/ticket_form.html. Один и тот же шаблон обслуживает и создание, и редактирование:
+[TABLE]
+{% extends "helpdesk/base.html" %} /  / {% block title %}{{ page_title }} — {{ block.super }}{% endblock %} /  / {% block content %} /   <div class="row"> /     <div class="col-md-8"> /       <h1 class="h3 mb-3">{{ page_title }}</h1> /       <form method="post" novalidate> /         {% csrf_token %} /         {% include "helpdesk/_form_fields.html" %} /         <button class="btn btn-primary" type="submit">Сохранить</button> /         <a class="btn btn-link" href="{% url 'ticket_list' %}">Отмена</a> /       </form> /     </div> /   </div> / {% endblock %}
+[/TABLE]
+[Normal] Атрибут novalidate отключает проверку полей браузером, чтобы на занятии было видно серверную проверку Django. В рабочей системе его обычно убирают: проверка в браузере удобнее пользователю, а серверная всё равно остаётся обязательной.
+[Normal] 4. Добавить в модель Ticket правило «кто может редактировать заявку» (после get_absolute_url):
+[TABLE]
+def can_be_edited_by(self, user): /     """ИТ-отдел правит любые заявки, автор — только свои и только новые.""" /     if user.has_perm("helpdesk.change_ticket"): /         return True /     return self.created_by == user and self.status == self.Status.NEW
+[/TABLE]
+[Normal] Бизнес-правило живёт в модели, а не во view и не в шаблоне. Тогда его одинаково используют страница заявки (показывать ли кнопку), view редактирования (пускать ли) и, в будущем, REST API.
+[Normal] 5. Добавить view в helpdesk/views.py. Сначала заменить импорты в начале файла:
+[TABLE]
+from django.contrib import messages / from django.contrib.auth.decorators import login_required / from django.core.exceptions import PermissionDenied / from django.http import HttpResponse / from django.shortcuts import get_object_or_404, redirect, render /  / from .forms import TicketForm / from .models import Ticket
+[/TABLE]
+[Normal] Затем добавить в конец файла:
+[TABLE]
+@login_required / def ticket_create(request): /     if request.method == "POST": /         form = TicketForm(request.POST) /         if form.is_valid(): /             ticket = form.save(commit=False) /             ticket.created_by = request.user /             ticket.save() /             messages.success(request, f"Заявка №{ticket.pk} зарегистрирована.") /             return redirect(ticket) /     else: /         user = request.user /         form = TicketForm(initial={"author": user.get_full_name() or user.username}) /     return render( /         request, "helpdesk/ticket_form.html", {"form": form, "page_title": "Новая заявка"} /     ) /  /  / @login_required / def ticket_update(request, pk): /     ticket = get_object_or_404(visible_tickets(request.user), pk=pk) /     if not ticket.can_be_edited_by(request.user): /         raise PermissionDenied /     if request.method == "POST": /         form = TicketForm(request.POST, instance=ticket) /         if form.is_valid(): /             form.save() /             messages.success(request, "Изменения сохранены.") /             return redirect(ticket) /     else: /         form = TicketForm(instance=ticket) /     return render( /         request, /         "helpdesk/ticket_form.html", /         {"form": form, "page_title": f"Заявка №{ticket.pk}: редактирование"}, /     )
+[/TABLE]
+[Normal] И передать в шаблон страницы заявки признак «можно редактировать». В ticket_detail заменить последнюю строку:
+[TABLE]
+context = { /     "ticket": ticket, /     "can_edit": ticket.can_be_edited_by(request.user), / } / return render(request, "helpdesk/ticket_detail.html", context)
+[/TABLE]
+[Normal] Разбор ticket_create по шагам цикла из п. 1.3:
+[TABLE]
+Код | Шаг
+else: form = TicketForm(initial=...) | GET: пустая форма, поле «Кто обратился» заранее заполнено ФИО вошедшего пользователя
+TicketForm(request.POST) | POST: форма получает введённые данные
+form.is_valid() | валидация: обязательность, длина, clean_title. Если False, выполнение доходит до последнего render, и форма показывается снова уже с ошибками
+form.save(commit=False) | создать объект Ticket из данных формы, но пока не сохранять в БД. Нужно, чтобы дописать поле, которого нет в форме
+ticket.created_by = request.user | автора берём из сессии, а не из формы: подделать его пользователь не сможет
+messages.success(...) | одноразовое сообщение, его покажет base.html на следующей странице
+redirect(ticket) | Post/Redirect/Get. redirect сам вызовет ticket.get_absolute_url()
+[/TABLE]
+[Normal] В ticket_update форма создаётся с instance=ticket: тогда она заполнена текущими значениями, а save() обновляет существующую запись вместо создания новой. Если редактировать нельзя, PermissionDenied даёт ответ 403.
+[Normal] 6. Маршруты в helpdesk/urls.py. Адрес tickets/new/ должен стоять до tickets/<int:pk>/ (хотя new и так не число, держать фиксированные адреса выше шаблонных — полезная привычка):
+[TABLE]
+path("tickets/new/", views.ticket_create, name="ticket_create"), / path("tickets/<int:pk>/", views.ticket_detail, name="ticket_detail"), / path("tickets/<int:pk>/edit/", views.ticket_update, name="ticket_update"),
+[/TABLE]
+[Normal] 7. Добавить ссылки:
+[List Bullet] в base.html в меню, после ссылки «Заявки»:
+[TABLE]
+<a class="nav-link" href="{% url 'ticket_create' %}">Новая заявка</a>
+[/TABLE]
+[List Bullet] в ticket_list.html заменить заголовок <h1 ...>Заявки</h1> на заголовок с кнопкой:
+[TABLE]
+<div class="d-flex justify-content-between align-items-center mb-3"> /   <h1 class="h3 mb-0">Заявки</h1> /   <a class="btn btn-primary" href="{% url 'ticket_create' %}">Новая заявка</a> / </div>
+[/TABLE]
+[List Bullet] в ticket_detail.html после абзаца с описанием:
+[TABLE]
+{% if can_edit %} /   <a class="btn btn-outline-primary" href="{% url 'ticket_update' ticket.pk %}">Редактировать</a> / {% endif %}
+[/TABLE]
+[Normal] 8. Проверить под ivanov:
+[List Bullet] отправить форму с темой «abc» и пустым полем «Кто обратился»: форма вернулась с двумя ошибками, введённые значения сохранились;
+[List Bullet] создать нормальную заявку: перенаправление на её страницу, зелёное сообщение «Заявка №… зарегистрирована», в поле «Зарегистрировал» — ivanov;
+[List Bullet] нажать F5 на странице заявки: дубль не создаётся (сработал Post/Redirect/Get);
+[List Bullet] отредактировать заявку и сохранить.
+[Normal] 9. Сломать и починить. Временно убрать {% csrf_token %} из ticket_form.html и отправить форму. Получите страницу «Ошибка доступа (403). Ошибка проверки CSRF. Запрос отклонён.». Вернуть токен на место.
+[Heading 1] Часть 7. Практика — обработка заявки ИТ-отделом (≈20 мин)
+[Normal] Что делаем и зачем: ИТ-специалист на странице заявки назначает исполнителя и меняет статус. Это действие доступно только группе «ИТ-отдел», а в исполнители можно выбрать только её участников.
+[Normal] 1. Добавить в helpdesk/forms.py импорт и вторую форму:
+[TABLE]
+from django.contrib.auth import get_user_model
+[/TABLE]
+[TABLE]
+class TicketProcessForm(BootstrapFormMixin, forms.ModelForm): /     """Форма ИТ-отдела: статус и исполнитель.""" /  /     class Meta: /         model = Ticket /         fields = ["status", "assignee"] /  /     def __init__(self, *args, **kwargs): /         super().__init__(*args, **kwargs) /         assignee = self.fields["assignee"] /         assignee.queryset = get_user_model().objects.filter(groups__name="ИТ-отдел") /         assignee.empty_label = "— не назначен —"
+[/TABLE]
+[Normal] Ограничение queryset работает в обе стороны: в выпадающем списке будут только сотрудники ИТ-отдела, и, если кто-то подделает запрос и пришлёт номер другого пользователя, форма не пройдёт валидацию.
+[Normal] 2. Добавить view в helpdesk/views.py. В начале файла заменить соответствующие строки импорта на эти (добавились permission_required, require_POST и TicketProcessForm):
+[TABLE]
+from django.contrib.auth.decorators import login_required, permission_required / from django.views.decorators.http import require_POST /  / from .forms import TicketForm, TicketProcessForm
+[/TABLE]
+[Normal] В конец файла:
+[TABLE]
+@require_POST / @permission_required("helpdesk.change_ticket", raise_exception=True) / def ticket_process(request, pk): /     ticket = get_object_or_404(Ticket, pk=pk) /     form = TicketProcessForm(request.POST, instance=ticket) /     if form.is_valid(): /         form.save() /         messages.success(request, "Заявка обновлена.") /     else: /         messages.error(request, "Не удалось обновить заявку: проверьте значения полей.") /     return redirect(ticket)
+[/TABLE]
+[Normal] В ticket_detail перед return добавить форму для ИТ-отдела:
+[TABLE]
+if request.user.has_perm("helpdesk.change_ticket"): /     context["process_form"] = TicketProcessForm(instance=ticket)
+[/TABLE]
+[TABLE]
+Декоратор | Что делает
+@require_POST | view принимает только POST, на GET ответит 405. Изменение данных по GET-запросу (по простой ссылке) — грубая ошибка
+@permission_required(..., raise_exception=True) | нет права — ответ 403. Без raise_exception пользователя перебросило бы на страницу входа, что сбивает с толку: он ведь уже вошёл
+[/TABLE]
+[Normal] Здесь нет @login_required: у анонимного пользователя прав нет, поэтому permission_required и так его не пропустит.
+[Normal] 3. Маршрут в helpdesk/urls.py:
+[TABLE]
+path("tickets/<int:pk>/process/", views.ticket_process, name="ticket_process"),
+[/TABLE]
+[Normal] 4. В ticket_detail.html добавить карточку обработки. Она размещается во второй колонке, сразу после закрывающего </div> блока col-md-8, внутри <div class="row">:
+[TABLE]
+{% if process_form %} /   <div class="col-md-4"> /     <div class="card"> /       <div class="card-header">Обработка заявки</div> /       <div class="card-body"> /         <form method="post" action="{% url 'ticket_process' ticket.pk %}"> /           {% csrf_token %} /           {% include "helpdesk/_form_fields.html" with form=process_form %} /           <button class="btn btn-success" type="submit">Применить</button> /         </form> /       </div> /     </div> /   </div> / {% endif %}
+[/TABLE]
+[Normal] {% include ... with form=process_form %} подставляет фрагмент из части 6, передав ему другую форму под именем form.
+[Normal] 5. Проверить полный сценарий:
+[List Bullet] ivanov создаёт заявку. Карточки «Обработка заявки» у него нет;
+[List Bullet] petrov открывает её, назначает себя исполнителем и ставит статус «В работе»;
+[List Bullet] ivanov обновляет страницу: видит статус и исполнителя, а кнопки «Редактировать» больше нет. Если открыть /tickets/<номер>/edit/ вручную, получим 403.
+[Heading 1] Часть 8. Практика — поиск и фильтр по статусу (≈10 мин)
+[Normal] Что делаем и зачем: когда заявок десятки, ИТ-отделу нужно быстро найти нужную. Делаем поиск по тексту и фильтр по статусу через параметры адреса: /tickets/?q=принтер&status=new.
+[Normal] 1. В helpdesk/views.py добавить импорт и заменить ticket_list:
+[TABLE]
+from django.db.models import Q
+[/TABLE]
+[TABLE]
+@login_required / def ticket_list(request): /     tickets = visible_tickets(request.user).order_by("-created_at") /  /     status = request.GET.get("status", "") /     query = request.GET.get("q", "").strip() /     if status: /         tickets = tickets.filter(status=status) /     if query: /         tickets = tickets.filter( /             Q(title__icontains=query) /             | Q(author__icontains=query) /             | Q(description__icontains=query) /         ) /  /     context = { /         "tickets": tickets, /         "statuses": Ticket.Status.choices, /         "status": status, /         "query": query, /     } /     return render(request, "helpdesk/ticket_list.html", context)
+[/TABLE]
+[Normal] request.GET — параметры из адреса после ?. Обычный .filter() объединяет условия через И, а Q(...) | Q(...) позволяет записать ИЛИ: «тема или автор или описание содержит строку». Фильтры накладываются на выборку из visible_tickets, поэтому сотрудник и в поиске видит только свои заявки.
+[Normal] 2. В ticket_list.html после блока с заголовком и кнопкой добавить форму:
+[TABLE]
+<form method="get" class="row g-2 mb-3"> /   <div class="col-md-6"> /     <input class="form-control" type="search" name="q" value="{{ query }}" /            placeholder="Поиск по теме, автору, описанию"> /   </div> /   <div class="col-md-4"> /     <select class="form-select" name="status"> /       <option value="">Все статусы</option> /       {% for value, label in statuses %} /         <option value="{{ value }}" {% if value == status %}selected{% endif %}>{{ label }}</option> /       {% endfor %} /     </select> /   </div> /   <div class="col-md-2"> /     <button class="btn btn-outline-secondary w-100" type="submit">Найти</button> /   </div> / </form>
+[/TABLE]
+[Normal] Поиск — это форма с method="get": она ничего не меняет в данных, а результат поиска можно сохранить в закладки или переслать коллеге ссылкой. Поэтому {% csrf_token %} здесь не нужен.
+[Normal] 3. Эксперимент. Найти заявку про принтер запросами принтер, Принтер и ПРИНТЕР. В SQLite часть запросов ничего не найдёт: регистронезависимое сравнение LIKE в SQLite работает только для латиницы, а icontains на SQLite превращается именно в LIKE. В PostgreSQL (лабы №1–3) все три варианта сработают. Это хороший пример, почему прототип на SQLite нельзя считать окончательной проверкой: поведение базы данных в продакшене может отличаться.
+[Heading 1] Часть 9. Практика — автоматические тесты (≈20 мин)
+[Normal] Что делаем и зачем: правила доступа — самое важное и самое хрупкое в системе. Одна забытая строка, и сотрудник видит чужие заявки. Закрепляем сценарии из таблицы п. 1.2 тестами, которые проверяются одной командой. Позже эти же тесты будет запускать Jenkins при каждом изменении кода.
+[Normal] 1. Заменить содержимое helpdesk/tests.py:
+[TABLE]
+from django.contrib.auth.models import Group, Permission, User / from django.test import TestCase / from django.urls import reverse /  / from .models import Ticket /  /  / class TicketAccessTests(TestCase): /     @classmethod /     def setUpTestData(cls): /         cls.employee = User.objects.create_user("ivanov", password="test-pass-123") /         cls.colleague = User.objects.create_user("sidorov", password="test-pass-123") /         cls.it_user = User.objects.create_user("petrov", password="test-pass-123") /  /         it_group = Group.objects.create(name="ИТ-отдел") /         it_group.permissions.add( /             Permission.objects.get(codename="change_ticket"), /             Permission.objects.get(codename="view_ticket"), /         ) /         cls.it_user.groups.add(it_group) /  /         cls.own_ticket = Ticket.objects.create( /             title="Не печатает принтер", author="Иванов", created_by=cls.employee /         ) /         cls.foreign_ticket = Ticket.objects.create( /             title="Нет доступа к 1С", author="Сидоров", created_by=cls.colleague /         ) /  /     def test_anonymous_is_redirected_to_login(self): /         url = reverse("ticket_list") /         response = self.client.get(url) /         self.assertRedirects(response, f"{reverse('login')}?next={url}") /  /     def test_employee_sees_only_own_tickets(self): /         self.client.force_login(self.employee) /         response = self.client.get(reverse("ticket_list")) /         self.assertContains(response, self.own_ticket.title) /         self.assertNotContains(response, self.foreign_ticket.title) /  /     def test_employee_cannot_open_foreign_ticket(self): /         self.client.force_login(self.employee) /         response = self.client.get(self.foreign_ticket.get_absolute_url()) /         self.assertEqual(response.status_code, 404) /  /     def test_created_ticket_belongs_to_current_user(self): /         self.client.force_login(self.employee) /         response = self.client.post( /             reverse("ticket_create"), /             {"title": "Сломалась мышь", "author": "Иванов", "priority": "normal"}, /         ) /         ticket = Ticket.objects.get(title="Сломалась мышь") /         self.assertEqual(ticket.created_by, self.employee) /         self.assertRedirects(response, ticket.get_absolute_url()) /  /     def test_short_title_is_rejected(self): /         self.client.force_login(self.employee) /         response = self.client.post( /             reverse("ticket_create"), /             {"title": "abc", "author": "Иванов", "priority": "normal"}, /         ) /         self.assertEqual(response.status_code, 200) /         self.assertContains(response, "хотя бы в 5 символов") /         self.assertFalse(Ticket.objects.filter(title="abc").exists()) /  /     def test_employee_cannot_process_ticket(self): /         self.client.force_login(self.employee) /         response = self.client.post( /             reverse("ticket_process", args=[self.own_ticket.pk]), {"status": "done"} /         ) /         self.assertEqual(response.status_code, 403) /  /     def test_it_user_can_process_ticket(self): /         self.client.force_login(self.it_user) /         self.client.post( /             reverse("ticket_process", args=[self.foreign_ticket.pk]), /             {"status": "in_progress", "assignee": self.it_user.pk}, /         ) /         self.foreign_ticket.refresh_from_db() /         self.assertEqual(self.foreign_ticket.status, Ticket.Status.IN_PROGRESS) /         self.assertEqual(self.foreign_ticket.assignee, self.it_user)
+[/TABLE]
+[TABLE]
+Элемент | Что означает
+TestCase | каждый тест выполняется в транзакции, которая откатывается после теста: тесты не влияют друг на друга
+setUpTestData | данные создаются один раз на весь класс тестов, а не перед каждым тестом. Быстрее
+self.client | тестовый «браузер»: делает запросы к приложению без запуска сервера
+force_login(user) | войти под пользователем без пароля и формы входа
+assertContains / assertNotContains | ответ 200 и в HTML есть (нет) указанный текст
+assertRedirects | ответ — перенаправление на указанный адрес
+refresh_from_db() | перечитать объект из базы, чтобы увидеть изменения, сделанные view
+[/TABLE]
+[Normal] 2. Запустить:
+[TABLE]
+python manage.py test helpdesk
+[/TABLE]
+[Normal] Django создаст отдельную временную тестовую базу, прогонит тесты и удалит её. Ваши рабочие данные в db.sqlite3 не затрагиваются. Ожидаемый результат: Ran 7 tests ... OK.
+[Normal] 3. Убедиться, что тесты ловят ошибку. В visible_tickets временно заменить последнюю строку на return tickets, то есть «всем видно всё». Запустить тесты: два из них должны упасть (test_employee_sees_only_own_tickets и test_employee_cannot_open_foreign_ticket). Вернуть строку на место. Тест, который никогда не падает, ничего не проверяет.
+[Heading 1] Часть 10. Частые проблемы
+[TABLE]
+Симптом | Причина и решение
+NoReverseMatch: Reverse for 'ticket_create' not found | в шаблоне используется имя маршрута, которого ещё нет в urls.py, или в имени опечатка. Проверить name= в path(...)
+NoReverseMatch ... with arguments '('',)' | в {% url 'ticket_update' ticket.pk %} переменная ticket пустая: в контекст шаблона не передан объект
+TemplateSyntaxError: Invalid block tag ... 'endblock' или «extends must be first» | {% extends %} стоит не первой строкой шаблона, или блоки {% block %} не закрыты
+«Ошибка доступа (403). Ошибка проверки CSRF» | в форме нет {% csrf_token %}, или браузер блокирует cookie для сайта
+После нажатия «Сохранить» страница просто перезагружается, ошибок не видно | шаблон не выводит ошибки формы: проверить вывод field.errors и non_field_errors. Или у <form> не указан method="post"
+TemplateDoesNotExist: registration/login.html | шаблон входа лежит не в helpdesk/templates/registration/
+«Выйти» даёт 405 Method Not Allowed | выход сделан ссылкой (GET). В Django 5+ нужна форма с method="post" и {% csrf_token %}
+Сотрудник не видит старые заявки из лабы №0 | так и должно быть: у них пустой created_by. Их видит ИТ-отдел и суперпользователь
+ИТ-специалист видит только свои заявки, карточки обработки нет | пользователь не включён в группу ИТ-отдел или группе не выдано право Can change ticket
+В списке исполнителей пусто | в группе ИТ-отдел нет пользователей, или группа названа иначе (пробел, другой дефис). Название должно совпадать с groups__name="ИТ-отдел" в форме
+Поиск ПРИНТЕР не находит «принтер» | особенность SQLite (см. часть 8, п. 3). В PostgreSQL работает
+makemigrations спрашивает «Please select a fix: 1) Provide a one-off default…» | добавлено обязательное поле без значения по умолчанию, а в таблице уже есть записи. Выбрать 2) Quit, добавить полю null=True или default=... и повторить
+fields.E304: Reverse accessor ... clashes | две связи на User без разных related_name
+Стили Bootstrap не применились | нет доступа к cdn.jsdelivr.net. Прототип работает и без стилей. Для работы офлайн можно скачать bootstrap.min.css в папку helpdesk/static/ и подключить через {% load static %}
+[/TABLE]
+[Heading 1] Часть 11. Итог (≈10 мин)
+[Heading 2] Демонстрация прототипа преподавателю
+[Normal] Показать сценарий целиком, как его показывали бы заказчику:
+[Normal] 1. Под ivanov: создать заявку с ошибкой (короткая тема), исправить, сохранить; увидеть сообщение; отредактировать.
+[Normal] 2. Подставить в адрес номер чужой заявки: 404.
+[Normal] 3. Под petrov: найти заявку поиском, назначить себя исполнителем, перевести в «В работе».
+[Normal] 4. Снова под ivanov: статус и исполнитель видны, редактировать уже нельзя.
+[Normal] 5. python manage.py test helpdesk: все тесты проходят.
+[Heading 2] Чек-лист сдачи
+[List Bullet] ☐ Все страницы наследуют base.html: общая шапка, меню, сообщения
+[List Bullet] ☐ Модель расширена: Category, приоритет, описание, created_by, assignee, updated_at; миграция применена; категории заведены в admin panel
+[List Bullet] ☐ Есть страница заявки /tickets/<номер>/, на неё ведут ссылки из списка
+[List Bullet] ☐ Вход и выход работают; без входа список недоступен; выход — через POST
+[List Bullet] ☐ Созданы группа ИТ-отдел с правами и два пользователя: сотрудник и ИТ-специалист
+[List Bullet] ☐ Сотрудник создаёт заявку через форму, видит только свои заявки, редактирует только новые
+[List Bullet] ☐ ИТ-специалист видит все заявки, меняет статус и исполнителя; сотруднику это действие недоступно (403)
+[List Bullet] ☐ Работают поиск и фильтр по статусу
+[List Bullet] ☐ python manage.py test helpdesk — 7 тестов, все проходят
+[List Bullet] ☐ Каждая часть зафиксирована отдельным коммитом в Git
+[Heading 2] Контрольные вопросы
+[Normal] 1. Зачем делают прототип? Что из этого прототипа сохранится при переходе на React и REST API, а что будет заменено?
+[Normal] 2. Опишите цикл работы формы: что происходит при GET, при POST с ошибками и при успешном POST?
+[Normal] 3. Зачем после успешного сохранения делается redirect? Что будет без него, если нажать F5?
+[Normal] 4. Для чего нужен {% csrf_token %}? Почему он не нужен в форме поиска?
+[Normal] 5. Что делает form.save(commit=False) и зачем он понадобился в ticket_create? Почему created_by нет среди полей формы?
+[Normal] 6. Чем аутентификация отличается от авторизации? Найдите в своём коде строки, отвечающие за каждую.
+[Normal] 7. Почему правило «сотрудник видит только свои заявки» сделано фильтрацией выборки, а не через permission_required?
+[Normal] 8. Почему на чужую заявку система отвечает 404, а на попытку сотрудника сменить статус — 403?
+[Normal] 9. Почему поиск ведёт себя по-разному на SQLite и PostgreSQL? Какой вывод из этого стоит сделать о тестировании?
+[Normal] 10. Почему тест, который ни разу не падал, может ничего не проверять?
+[Heading 2] Дополнительные задания (по желанию)
+[List Bullet] Комментарии к заявке: модель Comment (заявка, автор, текст, дата), список комментариев и форма добавления на странице заявки. Комментировать могут автор заявки и ИТ-отдел.
+[List Bullet] Постраничный вывод списка заявок через django.core.paginator.Paginator (по 20 на страницу) с сохранением параметров поиска в ссылках на страницы.
+[List Bullet] Переписать view на классы: ListView, DetailView, CreateView, UpdateView с LoginRequiredMixin. Сравнить объём кода.
+[List Bullet] История статусов: модель StatusChange (кто, когда, с какого на какой статус), заполняется в ticket_process.
+[List Bullet] Выгрузка в CSV списка заявок с учётом текущего фильтра.
+[Heading 2] Что дальше
+[Normal] Прототип показал, какие данные нужны, какие роли есть и как они работают. В основной линии курса то же самое делается «по-взрослому»: PostgreSQL в Docker Compose (лаба №1), REST API на Django REST Framework вместо HTML-страниц (лаба №2), настройки для разных окружений и собственная модель пользователя (лаба №3). Модели, правила доступа и тесты из этого прототипа переносятся туда почти без изменений. Шаблоны заменит фронтенд на React.

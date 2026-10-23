@@ -41,8 +41,26 @@ CATALOG = {
 }
 
 DEMO_IMAGES = {
+    'ssd-1tb-nvme': 'ssd-1tb-nvme.png',
+    'ssd-512-nvme': 'ssd-1tb-nvme.png',
+    'wifi-usb-adapter': 'wifi-usb-adapter.png',
+    'router-dual-band': 'router-dual-band.png',
+    'hdd-external-2tb': 'hdd-external-2tb.png',
+    'laptop-14-i3': 'laptop-14-i3.png',
+    'laptop-15-i5': 'laptop-15-i5.png',
+    'laptop-16-i7': 'laptop-15-i5.png',
+    'laptop-13-edu': 'laptop-14-i3.png',
+    'monitor-24-fhd': 'monitor-24-fhd.png',
     'monitor-27-2k': 'monitor-27-2k.png',
+    'monitor-32-4k': 'monitor-32-4k.png',
+    'monitor-22-office': 'monitor-24-fhd.png',
+    'keyboard-office': 'keyboard-mechanical.png',
     'keyboard-mechanical': 'keyboard-mechanical.png',
+    'keyboard-mouse-set': 'keyboard-mouse-set.png',
+    'mouse-wireless': 'mouse-wireless.png',
+    'switch-8-port': 'switch-8-port.png',
+    'patch-cord-5m': 'patch-cord-5m.png',
+    'usb-flash-64': 'usb-flash-64.png',
 }
 
 

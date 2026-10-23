@@ -1,0 +1,462 @@
+[Title] Лабораторная работа №0.3: Интернет-магазин на Django — корзина, заказы, личный кабинет. Итоговое задание
+[Normal] Продолжительность: ~3,5–4 часа (2 семинара; что не успели на занятии, доделывается дома) + итоговое самостоятельное задание (часть 11)
+[Normal] Цель: превратить витрину из лабораторной №0.2 в работающий магазин. Покупатель кладёт товары в корзину, регистрируется, оформляет заказ, и остатки на складе списываются в одной транзакции. В личном кабинете он видит историю заказов и может отменить новый заказ. Менеджер обрабатывает заказы в admin panel с ограниченными правами. Основные сценарии закреплены тестами. В конце лабораторной — итоговое самостоятельное задание: свой магазин по варианту.
+[Normal] Что понадобится: проект shop в состоянии конца лабораторной №0.2: приложения accounts (своя модель пользователя) и catalog, заполненный командой seed_catalog каталог, общий templates/base.html, 6 проходящих тестов.
+[Normal] Все команды выполняются в папке проекта при активированном окружении. Каждую часть советуем завершать коммитом.
+[Heading 1] Часть 1. Теория (≈15 мин)
+[Heading 2] 1.1 Сессии: где живёт корзина
+[Normal] HTTP не помнит предыдущих запросов: каждый запрос браузера для сервера новый. Чтобы узнать посетителя, Django использует сессию:
+[Normal] 1. При первой записи в сессию Django создаёт запись в таблице django_session со случайным ключом.
+[Normal] 2. Ключ уходит в браузер в cookie sessionid. Сами данные остаются на сервере.
+[Normal] 3. При следующих запросах браузер присылает cookie, и Django загружает данные в request.session — объект, похожий на словарь.
+[Normal] Вход в систему тоже работает через сессию: после логина в ней хранится номер пользователя. Поэтому корзину удобно держать там же: она есть и у анонимного посетителя, и у вошедшего.
+[Normal] Две особенности, о которых нужно помнить:
+[List Bullet] данные сессии хранятся в формате JSON, а у JSON ключи словаря — только строки. Поэтому корзина хранится как {"7": 2}, а не {7: 2};
+[List Bullet] Django сохраняет сессию, только если заметил изменение. Присваивание request.session["cart"] = ... он видит, а изменение внутри вложенного словаря — нет. В таких случаях ставят request.session.modified = True.
+[Heading 2] 1.2 Транзакции: всё или ничего
+[Normal] Оформление заказа — это несколько записей в базу: сам заказ, по строке на каждый товар, уменьшение остатка каждого товара. Если на третьем товаре выяснится, что его не хватает, первые две записи уже сделаны. Получится заказ без части товаров, а остатки уменьшены неправильно.
+[Normal] Транзакция объединяет несколько операций в одну: либо выполняются все, либо ни одна. В Django это декоратор или блок transaction.atomic: если внутри возникло исключение, все изменения откатываются.
+[Normal] Вторая проблема — гонка. Два покупателя одновременно покупают последний товар: оба прочитали «остаток 1», оба оформили, остаток стал −1. Средства защиты:
+[TABLE]
+Средство | Что делает
+select_for_update() | блокирует прочитанные строки до конца транзакции: второй покупатель ждёт, пока первый закончит. В PostgreSQL блокируются строки, SQLite такого не умеет (Django просто игнорирует вызов), но SQLite и так допускает только одну пишущую транзакцию одновременно
+F("stock") - n | уменьшение остатка внутри базы данных одной командой UPDATE ... SET stock = stock - n, а не «прочитать в Python, вычесть, записать»
+PositiveIntegerField | база не даст сохранить отрицательный остаток
+[/TABLE]
+[Heading 2] 1.3 Цена на момент заказа
+[Normal] Цены меняются. Если в позиции заказа хранить только ссылку на товар, то после подорожания старые заказы «подорожают» задним числом, а бухгалтерия не сойдётся. Поэтому в позиции заказа копируют цену на момент покупки. Это общий принцип для документов в корпоративных системах: документ фиксирует состояние на дату создания.
+[Heading 2] 1.4 Где писать бизнес-логику
+[Normal] Оформление заказа нужно не только странице checkout. Позже его будут вызывать REST API, мобильное приложение, импорт заказов из маркетплейса. Если логика написана внутри view, её придётся копировать. Поэтому операции с несколькими моделями выносят в отдельный модуль services.py: обычные функции, которые принимают данные и выполняют операцию. View остаётся тонким: разбирает запрос, вызывает сервис, показывает результат.
+[Heading 1] Часть 2. Практика — корзина (≈40 мин)
+[Normal] Что делаем и зачем: покупатель кладёт товары в корзину, меняет количество, удаляет позиции. Корзина хранится в сессии и работает без регистрации.
+[Normal] 1. Создать приложение и подключить его в INSTALLED_APPS:
+[TABLE]
+python manage.py startapp cart
+[/TABLE]
+[TABLE]
+    "catalog", /     "cart", / ]
+[/TABLE]
+[Normal] 2. Класс корзины cart/cart.py. Он прячет детали хранения в сессии от остального кода:
+[TABLE]
+from dataclasses import dataclass / from decimal import Decimal /  / from catalog.models import Product /  / CART_SESSION_KEY = "cart" /  /  / @dataclass / class CartLine: /     product: Product /     quantity: int /  /     @property /     def total(self): /         return self.product.price * self.quantity /  /  / class Cart: /     """Корзина покупателя. Хранится в сессии в виде {"id товара": количество}.""" /  /     def __init__(self, request): /         self.session = request.session /         self.items = self.session.get(CART_SESSION_KEY, {}) /  /     def get_quantity(self, product): /         return self.items.get(str(product.pk), 0) /  /     def add(self, product, quantity=1, replace=False): /         """Добавляет товар, но не больше остатка. Возвращает итоговое количество.""" /         key = str(product.pk) /         if not replace: /             quantity += self.get_quantity(product) /         quantity = min(quantity, product.stock) /         if quantity > 0: /             self.items[key] = quantity /         else: /             self.items.pop(key, None) /         self.save() /         return quantity /  /     def remove(self, product): /         self.items.pop(str(product.pk), None) /         self.save() /  /     def clear(self): /         self.items = {} /         self.save() /  /     def save(self): /         self.session[CART_SESSION_KEY] = self.items /         self.session.modified = True /  /     def lines(self): /         products = Product.objects.filter(pk__in=self.items.keys(), is_active=True) /         return [CartLine(product, self.items[str(product.pk)]) for product in products] /  /     def total_price(self): /         return sum((line.total for line in self.lines()), Decimal("0")) /  /     def __len__(self): /         return sum(self.items.values())
+[/TABLE]
+[TABLE]
+Элемент | Что означает
+@dataclass CartLine | маленький класс «строка корзины»: товар, количество и сумма. @dataclass сам пишет __init__ по аннотациям полей
+self.session.get(...) | читаем корзину, не создавая её. Если бы мы сразу записывали пустую корзину в сессию, Django заводил бы сессию и ставил cookie каждому посетителю каталога
+str(product.pk) | ключи — строки, см. п. 1.1
+min(quantity, product.stock) | в корзину нельзя положить больше, чем есть на складе
+lines() | один SQL-запрос за всеми товарами корзины (pk__in). Снятые с продажи товары в корзину не попадают
+__len__ | len(cart) — общее количество штук, для значка в шапке
+[/TABLE]
+[Normal] 3. Форма количества cart/forms.py:
+[TABLE]
+from django import forms /  /  / class CartAddForm(forms.Form): /     quantity = forms.IntegerField(label="Количество", min_value=1, max_value=99, initial=1) /     replace = forms.BooleanField(required=False, widget=forms.HiddenInput)
+[/TABLE]
+[Normal] Это обычная Form, не ModelForm: она ничего не сохраняет в базу, только проверяет ввод. Флаг replace различает «добавить ещё 2 штуки» (со страницы товара) и «установить количество 2» (из корзины).
+[Normal] 4. View корзины cart/views.py:
+[TABLE]
+from django.contrib import messages / from django.shortcuts import get_object_or_404, redirect, render / from django.views.decorators.http import require_POST /  / from catalog.models import Product /  / from .cart import Cart / from .forms import CartAddForm /  /  / @require_POST / def cart_add(request, product_id): /     product = get_object_or_404(Product, pk=product_id, is_active=True) /     form = CartAddForm(request.POST) /     if not form.is_valid(): /         messages.error(request, "Укажите количество от 1 до 99.") /         return redirect(product) /  /     cart = Cart(request) /     quantity = form.cleaned_data["quantity"] /     replace = form.cleaned_data["replace"] /     requested = quantity if replace else cart.get_quantity(product) + quantity /     in_cart = cart.add(product, quantity, replace=replace) /  /     if in_cart == 0: /         messages.error(request, f"Товара «{product.name}» нет в наличии.") /     elif in_cart < requested: /         messages.warning( /             request, f"На складе только {product.stock} шт. товара «{product.name}»." /         ) /     else: /         messages.success(request, f"«{product.name}»: в корзине {in_cart} шт.") /     return redirect("cart:detail") /  /  / @require_POST / def cart_remove(request, product_id): /     product = get_object_or_404(Product, pk=product_id) /     Cart(request).remove(product) /     messages.info(request, f"«{product.name}» удалён из корзины.") /     return redirect("cart:detail") /  /  / def cart_detail(request): /     cart = Cart(request) /     lines = cart.lines() /     context = { /         "lines": lines, /         "total": sum(line.total for line in lines), /     } /     return render(request, "cart/detail.html", context)
+[/TABLE]
+[Normal] Добавление и удаление меняют данные, поэтому принимают только POST (@require_POST). Корзина работает без входа в систему, поэтому @login_required здесь нет.
+[Normal] 5. Маршруты cart/urls.py:
+[TABLE]
+from django.urls import path /  / from . import views /  / app_name = "cart" /  / urlpatterns = [ /     path("", views.cart_detail, name="detail"), /     path("add/<int:product_id>/", views.cart_add, name="add"), /     path("remove/<int:product_id>/", views.cart_remove, name="remove"), / ]
+[/TABLE]
+[Normal] и в config/urls.py перед строкой с каталогом:
+[TABLE]
+path("cart/", include("cart.urls")), / path("", include("catalog.urls")),
+[/TABLE]
+[Normal] 6. Значок с количеством в шапке — контекстный процессор cart/context_processors.py:
+[TABLE]
+from .cart import Cart /  /  / def cart(request): /     """Количество товаров в корзине для шапки сайта.""" /     return {"cart_count": len(Cart(request))}
+[/TABLE]
+[Normal] Подключить в config/settings.py после процессора категорий:
+[TABLE]
+"cart.context_processors.cart",
+[/TABLE]
+[Normal] В templates/base.html после формы поиска (после </form> внутри navbar) добавить:
+[TABLE]
+<div class="navbar-nav ms-3"> /   <a class="nav-link" href="{% url 'cart:detail' %}"> /     Корзина{% if cart_count %} <span class="badge bg-warning text-dark">{{ cart_count }}</span>{% endif %} /   </a> / </div>
+[/TABLE]
+[Normal] 7. Кнопка «В корзину» на странице товара. В catalog/templates/catalog/product_detail.html после строки «В наличии: … шт.» добавить форму:
+[TABLE]
+<form class="d-flex gap-2 mb-3" style="max-width: 260px" method="post" /       action="{% url 'cart:add' product.pk %}"> /   {% csrf_token %} /   <input class="form-control" type="number" name="quantity" value="1" /          min="1" max="{{ product.stock }}"> /   <button class="btn btn-primary text-nowrap" type="submit">В корзину</button> / </form>
+[/TABLE]
+[Normal] Форма находится внутри {% if product.in_stock %}: товар, которого нет, положить в корзину нельзя даже кнопкой.
+[Normal] 8. Страница корзины cart/templates/cart/detail.html:
+[TABLE]
+{% extends "base.html" %} /  / {% block title %}Корзина — {{ block.super }}{% endblock %} /  / {% block content %} /   <h1 class="h3 mb-3">Корзина</h1> /  /   {% if lines %} /     <table class="table align-middle"> /       <thead> /         <tr><th>Товар</th><th>Цена</th><th style="width: 200px">Количество</th><th>Сумма</th><th></th></tr> /       </thead> /       <tbody> /         {% for line in lines %} /           <tr> /             <td><a href="{{ line.product.get_absolute_url }}">{{ line.product.name }}</a></td> /             <td class="text-nowrap">{{ line.product.price|floatformat:"-2g" }} ₽</td> /             <td> /               <form class="d-flex gap-2" method="post" action="{% url 'cart:add' line.product.pk %}"> /                 {% csrf_token %} /                 <input class="form-control form-control-sm" type="number" name="quantity" /                        value="{{ line.quantity }}" min="1" max="{{ line.product.stock }}"> /                 <input type="hidden" name="replace" value="True"> /                 <button class="btn btn-sm btn-outline-secondary" type="submit">OK</button> /               </form> /             </td> /             <td class="text-nowrap">{{ line.total|floatformat:"-2g" }} ₽</td> /             <td> /               <form method="post" action="{% url 'cart:remove' line.product.pk %}"> /                 {% csrf_token %} /                 <button class="btn btn-sm btn-link text-danger" type="submit">Удалить</button> /               </form> /             </td> /           </tr> /         {% endfor %} /       </tbody> /       <tfoot> /         <tr> /           <th colspan="3" class="text-end">Итого:</th> /           <th class="text-nowrap">{{ total|floatformat:"-2g" }} ₽</th> /           <th></th> /         </tr> /       </tfoot> /     </table> /     <div class="d-flex justify-content-between"> /       <a class="btn btn-link" href="{% url 'catalog:product_list' %}">← Продолжить покупки</a> /     </div> /   {% else %} /     <p>Корзина пуста. <a href="{% url 'catalog:product_list' %}">Перейти в каталог</a></p> /   {% endif %} / {% endblock %}
+[/TABLE]
+[Normal] 9. Проверить:
+[List Bullet] положить в корзину 2 шт. монитора, потом ещё 5: появится предупреждение «На складе только … шт.», в корзине — весь остаток;
+[List Bullet] изменить количество в корзине, удалить позицию, значок в шапке пересчитывается;
+[List Bullet] открыть /cart/add/1/ адресом в браузере: 405, добавление только через форму;
+[List Bullet] в python manage.py shell посмотреть, как корзина лежит в базе:
+[TABLE]
+from django.contrib.sessions.models import Session /  / s = Session.objects.order_by("expire_date").last() / s.get_decoded()
+[/TABLE]
+[Normal] Будет что-то вроде {'cart': {'6': 2, '19': 3}}, а у вошедшего пользователя ещё и служебные ключи _auth_user_id и другие.
+[Heading 1] Часть 3. Практика — регистрация и вход (≈25 мин)
+[Normal] Что делаем и зачем: покупатель сам создаёт учётную запись. Вход и выход берём готовые из Django, регистрацию пишем сами.
+[Normal] 1. Общая для всего проекта примесь с классами Bootstrap (как в лабораторной №0.1, но теперь её используют несколько приложений) — config/forms.py:
+[TABLE]
+from django import forms /  /  / class BootstrapFormMixin: /     """Добавляет полям формы CSS-классы Bootstrap.""" /  /     def __init__(self, *args, **kwargs): /         super().__init__(*args, **kwargs) /         for field in self.fields.values(): /             if isinstance(field.widget, forms.Select): /                 field.widget.attrs["class"] = "form-select" /             elif not isinstance(field.widget, (forms.CheckboxInput, forms.HiddenInput)): /                 field.widget.attrs["class"] = "form-control"
+[/TABLE]
+[Normal] 2. Формы accounts/forms.py:
+[TABLE]
+from django import forms / from django.contrib.auth.forms import AuthenticationForm, UserCreationForm /  / from config.forms import BootstrapFormMixin /  / from .models import User /  /  / class LoginForm(BootstrapFormMixin, AuthenticationForm): /     pass /  /  / class SignUpForm(BootstrapFormMixin, UserCreationForm): /     email = forms.EmailField(label="Электронная почта") /  /     class Meta(UserCreationForm.Meta): /         model = User /         fields = ("username", "first_name", "last_name", "email")
+[/TABLE]
+[Normal] UserCreationForm — готовая форма Django: два поля пароля, проверка совпадения, проверка сложности пароля по AUTH_PASSWORD_VALIDATORS, сохранение пароля в виде хеша. По умолчанию она привязана к стандартной модели auth.User, поэтому в Meta указываем свою модель. Поле email объявлено в форме заново, чтобы сделать его обязательным: в модели оно необязательное.
+[Normal] 3. View регистрации accounts/views.py:
+[TABLE]
+from django.contrib import messages / from django.contrib.auth import login / from django.shortcuts import redirect, render /  / from .forms import SignUpForm /  /  / def signup(request): /     if request.method == "POST": /         form = SignUpForm(request.POST) /         if form.is_valid(): /             user = form.save() /             login(request, user) /             messages.success(request, "Вы зарегистрированы и вошли в магазин.") /             return redirect("catalog:product_list") /     else: /         form = SignUpForm() /     return render(request, "registration/signup.html", {"form": form})
+[/TABLE]
+[Normal] login(request, user) сразу выполняет вход, чтобы покупатель не вводил пароль второй раз.
+[Normal] 4. Маршруты accounts/urls.py:
+[TABLE]
+from django.contrib.auth import views as auth_views / from django.urls import include, path /  / from . import views / from .forms import LoginForm /  / urlpatterns = [ /     path("signup/", views.signup, name="signup"), /     path("login/", auth_views.LoginView.as_view(authentication_form=LoginForm), name="login"), /     path("", include("django.contrib.auth.urls")), / ]
+[/TABLE]
+[Normal] Свой маршрут login/ стоит раньше include(...): Django берёт первый подходящий, и вместо стандартной формы входа будет наша, с оформлением. Выход, смена и сброс пароля остаются стандартными. В config/urls.py:
+[TABLE]
+path("accounts/", include("accounts.urls")),
+[/TABLE]
+[Normal] В конец config/settings.py:
+[TABLE]
+LOGIN_URL = "login" / LOGIN_REDIRECT_URL = "catalog:product_list" / LOGOUT_REDIRECT_URL = "catalog:product_list"
+[/TABLE]
+[Normal] 5. Шаблоны. Фрагмент полей формы — в общую папку, он понадобится и для заказа: templates/_form_fields.html:
+[TABLE]
+{% for error in form.non_field_errors %} /   <div class="alert alert-danger">{{ error }}</div> / {% endfor %} /  / {% for field in form %} /   <div class="mb-3"> /     <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label> /     {{ field }} /     {% if field.help_text %} /       <div class="form-text">{{ field.help_text|safe }}</div> /     {% endif %} /     {% for error in field.errors %} /       <div class="text-danger small">{{ error }}</div> /     {% endfor %} /   </div> / {% endfor %}
+[/TABLE]
+[Normal] Фильтр safe у подсказки нужен потому, что подсказка к паролю в Django содержит HTML-список требований. Применять safe можно только к тексту, который написали разработчики, и никогда к тому, что ввёл пользователь.
+[Normal] templates/registration/login.html:
+[TABLE]
+{% extends "base.html" %} /  / {% block title %}Вход — {{ block.super }}{% endblock %} /  / {% block content %} /   <div class="row justify-content-center"> /     <div class="col-md-5"> /       <h1 class="h3 mb-3">Вход</h1> /       <form method="post"> /         {% csrf_token %} /         {% include "_form_fields.html" %} /         <input type="hidden" name="next" value="{{ next }}"> /         <button class="btn btn-primary" type="submit">Войти</button> /         <a class="btn btn-link" href="{% url 'signup' %}">Регистрация</a> /       </form> /     </div> /   </div> / {% endblock %}
+[/TABLE]
+[Normal] templates/registration/signup.html:
+[TABLE]
+{% extends "base.html" %} /  / {% block title %}Регистрация — {{ block.super }}{% endblock %} /  / {% block content %} /   <div class="row justify-content-center"> /     <div class="col-md-6"> /       <h1 class="h3 mb-3">Регистрация</h1> /       <form method="post" novalidate> /         {% csrf_token %} /         {% include "_form_fields.html" %} /         <button class="btn btn-primary" type="submit">Зарегистрироваться</button> /       </form> /     </div> /   </div> / {% endblock %}
+[/TABLE]
+[Normal] 6. В base.html внутри блока <div class="navbar-nav ms-3">, после ссылки на корзину, добавить:
+[TABLE]
+{% if user.is_authenticated %} /   {% if user.is_staff %} /     <a class="nav-link" href="{% url 'admin:index' %}">Управление</a> /   {% endif %} /   <form method="post" action="{% url 'logout' %}"> /     {% csrf_token %} /     <button class="btn btn-link nav-link" type="submit">Выйти ({{ user.username }})</button> /   </form> / {% else %} /   <a class="nav-link" href="{% url 'login' %}">Войти</a> /   <a class="nav-link" href="{% url 'signup' %}">Регистрация</a> / {% endif %}
+[/TABLE]
+[Normal] 7. Проверить:
+[List Bullet] зарегистрироваться с несовпадающими паролями и неправильной почтой: ошибки под полями;
+[List Bullet] зарегистрироваться правильно: сразу вход, имя в шапке;
+[List Bullet] положить товары в корзину до регистрации, потом зарегистрироваться или войти: корзина сохранилась. При входе Django меняет ключ сессии (защита от подмены сессии), но данные переносит в новую;
+[List Bullet] выйти: корзина очистилась. При выходе Django полностью удаляет сессию, чтобы следующий человек за тем же компьютером не увидел чужих данных.
+[Heading 1] Часть 4. Практика — модели заказа и сервисный слой (≈25 мин)
+[Normal] Что делаем и зачем: заказ — документ с шапкой (кто, куда, статус) и строками (что, по какой цене, сколько). Операции «оформить» и «отменить» выносим в services.py.
+[Normal] 1. Создать приложение и подключить в INSTALLED_APPS после cart:
+[TABLE]
+python manage.py startapp orders
+[/TABLE]
+[Normal] 2. orders/models.py:
+[TABLE]
+from django.conf import settings / from django.db import models / from django.urls import reverse /  / from catalog.models import Product /  /  / class Order(models.Model): /     class Status(models.TextChoices): /         NEW = "new", "Новый" /         CONFIRMED = "confirmed", "Подтверждён" /         SHIPPED = "shipped", "Передан в доставку" /         DONE = "done", "Выполнен" /         CANCELLED = "cancelled", "Отменён" /  /     user = models.ForeignKey( /         settings.AUTH_USER_MODEL, /         verbose_name="Покупатель", /         on_delete=models.PROTECT, /         related_name="orders", /     ) /     status = models.CharField( /         "Статус", max_length=20, choices=Status.choices, default=Status.NEW /     ) /     full_name = models.CharField("Получатель", max_length=150) /     phone = models.CharField("Телефон", max_length=30) /     address = models.CharField("Адрес доставки", max_length=300) /     comment = models.TextField("Комментарий", blank=True) /     created_at = models.DateTimeField("Оформлен", auto_now_add=True) /     updated_at = models.DateTimeField("Изменён", auto_now=True) /  /     class Meta: /         verbose_name = "заказ" /         verbose_name_plural = "заказы" /         ordering = ["-created_at"] /  /     def __str__(self): /         return f"Заказ №{self.pk}" /  /     def get_absolute_url(self): /         return reverse("orders:detail", args=[self.pk]) /  /     @property /     def total_price(self): /         return sum(item.total for item in self.items.all()) /  /     @property /     def can_be_cancelled(self): /         return self.status == self.Status.NEW /  /  / class OrderItem(models.Model): /     order = models.ForeignKey( /         Order, verbose_name="Заказ", on_delete=models.CASCADE, related_name="items" /     ) /     product = models.ForeignKey( /         Product, verbose_name="Товар", on_delete=models.PROTECT, related_name="order_items" /     ) /     price = models.DecimalField("Цена на момент заказа", max_digits=10, decimal_places=2) /     quantity = models.PositiveIntegerField("Количество") /  /     class Meta: /         verbose_name = "позиция заказа" /         verbose_name_plural = "позиции заказа" /  /     def __str__(self): /         return f"{self.product} × {self.quantity}" /  /     @property /     def total(self): /         return self.price * self.quantity
+[/TABLE]
+[TABLE]
+Решение | Почему так
+user — on_delete=PROTECT | заказы — учётные документы. Нельзя «случайно» потерять историю продаж, удалив покупателя
+OrderItem.order — CASCADE | строки не существуют без своего заказа: удалили заказ — удалились и строки
+OrderItem.product — PROTECT | товар, который кто-то купил, удалить нельзя, только скрыть (is_active). Вот зачем в лабораторной №0.2 появилось это поле
+OrderItem.price | цена копируется в момент заказа, см. п. 1.3
+full_name, phone, address в заказе, а не в пользователе | получатель конкретного заказа может отличаться от владельца учётной записи
+total_price — свойство, а не поле | сумма всегда считается по строкам и не может «разойтись» с ними
+[/TABLE]
+[Normal] 3. Миграция:
+[TABLE]
+python manage.py makemigrations orders / python manage.py migrate
+[/TABLE]
+[Normal] 4. Сервисный слой orders/services.py:
+[TABLE]
+from django.db import transaction / from django.db.models import F /  / from catalog.models import Product /  / from .models import Order, OrderItem /  /  / class OutOfStockError(Exception): /     """Товара на складе меньше, чем в корзине.""" /  /  / @transaction.atomic / def place_order(user, order_form, cart_lines): /     """Создаёт заказ из строк корзины и списывает товар со склада. /  /     Всё выполняется в одной транзакции: если какого-то товара не хватает, /     не сохранится ни заказ, ни его позиции, ни изменения остатков. /     """ /     product_ids = [line.product.pk for line in cart_lines] /     products = Product.objects.select_for_update().in_bulk(product_ids) /  /     order = order_form.save(commit=False) /     order.user = user /     order.save() /  /     for line in cart_lines: /         product = products[line.product.pk] /         if product.stock < line.quantity: /             raise OutOfStockError( /                 f"Товара «{product.name}» на складе {product.stock} шт., " /                 f"а в корзине {line.quantity}." /             ) /         OrderItem.objects.create( /             order=order, product=product, price=product.price, quantity=line.quantity /         ) /         Product.objects.filter(pk=product.pk).update(stock=F("stock") - line.quantity) /  /     return order /  /  / @transaction.atomic / def cancel_order(order): /     """Отменяет заказ и возвращает товары на склад.""" /     for item in order.items.all(): /         Product.objects.filter(pk=item.product_id).update(stock=F("stock") + item.quantity) /     order.status = Order.Status.CANCELLED /     order.save(update_fields=["status", "updated_at"])
+[/TABLE]
+[TABLE]
+Элемент | Что означает
+@transaction.atomic | вся функция — одна транзакция. Исключение OutOfStockError отменит уже созданный заказ и строки
+select_for_update().in_bulk(ids) | заново читаем товары из базы (остаток мог измениться, пока покупатель заполнял форму) с блокировкой строк. in_bulk возвращает словарь {id: товар}
+price=product.price | снимок цены
+update(stock=F("stock") - n) | атомарное уменьшение остатка в самой базе
+class OutOfStockError(Exception) | своё исключение: view поймает именно его и покажет понятное сообщение, а не страницу ошибки 500
+save(update_fields=[...]) | записать только указанные поля, а не всю строку
+[/TABLE]
+[Normal] Проверку остатка можно было бы сделать до создания заказа. Здесь она намеренно стоит внутри цикла после записи, чтобы на практике увидеть откат транзакции (часть 8).
+[Heading 1] Часть 5. Практика — оформление заказа и личный кабинет (≈35 мин)
+[Normal] 1. Форма заказа orders/forms.py:
+[TABLE]
+from django import forms /  / from config.forms import BootstrapFormMixin /  / from .models import Order /  /  / class OrderForm(BootstrapFormMixin, forms.ModelForm): /     class Meta: /         model = Order /         fields = ["full_name", "phone", "address", "comment"] /         widgets = { /             "phone": forms.TextInput(attrs={"placeholder": "+7 ..."}), /             "comment": forms.Textarea(attrs={"rows": 3}), /         }
+[/TABLE]
+[Normal] Полей user и status в форме нет: покупателя берём из сессии, статус у нового заказа всегда «Новый».
+[Normal] 2. View orders/views.py:
+[TABLE]
+from django.contrib import messages / from django.contrib.auth.decorators import login_required / from django.shortcuts import get_object_or_404, redirect, render / from django.views.decorators.http import require_POST /  / from cart.cart import Cart /  / from .forms import OrderForm / from .services import OutOfStockError, cancel_order, place_order /  /  / @login_required / def checkout(request): /     cart = Cart(request) /     lines = cart.lines() /     if not lines: /         messages.info(request, "Корзина пуста.") /         return redirect("cart:detail") /  /     if request.method == "POST": /         form = OrderForm(request.POST) /         if form.is_valid(): /             try: /                 order = place_order(request.user, form, lines) /             except OutOfStockError as error: /                 messages.error(request, str(error)) /                 return redirect("cart:detail") /             cart.clear() /             messages.success(request, f"Заказ №{order.pk} оформлен. Спасибо за покупку!") /             return redirect(order) /     else: /         user = request.user /         form = OrderForm(initial={"full_name": user.get_full_name()}) /  /     context = { /         "form": form, /         "lines": lines, /         "total": sum(line.total for line in lines), /     } /     return render(request, "orders/checkout.html", context) /  /  / @login_required / def order_list(request): /     orders = request.user.orders.prefetch_related("items") /     return render(request, "orders/order_list.html", {"orders": orders}) /  /  / @login_required / def order_detail(request, pk): /     order = get_object_or_404( /         request.user.orders.prefetch_related("items__product"), pk=pk /     ) /     return render(request, "orders/order_detail.html", {"order": order}) /  /  / @login_required / @require_POST / def order_cancel(request, pk): /     order = get_object_or_404(request.user.orders, pk=pk) /     if order.can_be_cancelled: /         cancel_order(order) /         messages.success(request, f"Заказ №{order.pk} отменён, товары возвращены на склад.") /     else: /         messages.error( /             request, f"Заказ в статусе «{order.get_status_display()}» отменить нельзя." /         ) /     return redirect(order)
+[/TABLE]
+[TABLE]
+Элемент | Что означает
+request.user.orders | обратная связь related_name="orders": только заказы текущего пользователя. Чужой заказ по номеру даст 404, как в лабораторной №0.1
+prefetch_related("items") | строки всех заказов списка загружаются одним дополнительным запросом, а не отдельным запросом на каждый заказ. select_related работает для связей «к одному» (через JOIN), prefetch_related — для связей «ко многим»
+"items__product" | заодно подгрузить товары строк: в шаблоне выводится item.product.name
+cart.clear() после place_order | корзина очищается, только если заказ действительно сохранён
+[/TABLE]
+[Normal] 3. Маршруты orders/urls.py:
+[TABLE]
+from django.urls import path /  / from . import views /  / app_name = "orders" /  / urlpatterns = [ /     path("", views.order_list, name="list"), /     path("checkout/", views.checkout, name="checkout"), /     path("<int:pk>/", views.order_detail, name="detail"), /     path("<int:pk>/cancel/", views.order_cancel, name="cancel"), / ]
+[/TABLE]
+[Normal] и в config/urls.py:
+[TABLE]
+path("orders/", include("orders.urls")),
+[/TABLE]
+[Normal] 4. Шаблон оформления orders/templates/orders/checkout.html:
+[TABLE]
+{% extends "base.html" %} /  / {% block title %}Оформление заказа — {{ block.super }}{% endblock %} /  / {% block content %} /   <h1 class="h3 mb-3">Оформление заказа</h1> /   <div class="row g-4"> /     <div class="col-md-7"> /       <form method="post" novalidate> /         {% csrf_token %} /         {% include "_form_fields.html" %} /         <button class="btn btn-success" type="submit">Подтвердить заказ</button> /         <a class="btn btn-link" href="{% url 'cart:detail' %}">Вернуться в корзину</a> /       </form> /     </div> /     <div class="col-md-5"> /       <div class="card"> /         <div class="card-header">Ваш заказ</div> /         <ul class="list-group list-group-flush"> /           {% for line in lines %} /             <li class="list-group-item d-flex justify-content-between"> /               <span>{{ line.product.name }} × {{ line.quantity }}</span> /               <span class="text-nowrap">{{ line.total|floatformat:"-2g" }} ₽</span> /             </li> /           {% endfor %} /           <li class="list-group-item d-flex justify-content-between fw-bold"> /             <span>Итого</span> /             <span class="text-nowrap">{{ total|floatformat:"-2g" }} ₽</span> /           </li> /         </ul> /       </div> /     </div> /   </div> / {% endblock %}
+[/TABLE]
+[Normal] 5. Список заказов orders/templates/orders/order_list.html:
+[TABLE]
+{% extends "base.html" %} /  / {% block title %}Мои заказы — {{ block.super }}{% endblock %} /  / {% block content %} /   <h1 class="h3 mb-3">Мои заказы</h1> /   <table class="table table-hover"> /     <thead> /       <tr><th>Заказ</th><th>Дата</th><th>Статус</th><th>Сумма</th></tr> /     </thead> /     <tbody> /       {% for order in orders %} /         <tr> /           <td><a href="{{ order.get_absolute_url }}">№{{ order.pk }}</a></td> /           <td>{{ order.created_at|date:"d.m.Y H:i" }}</td> /           <td>{{ order.get_status_display }}</td> /           <td class="text-nowrap">{{ order.total_price|floatformat:"-2g" }} ₽</td> /         </tr> /       {% empty %} /         <tr><td colspan="4" class="text-muted">Заказов пока нет.</td></tr> /       {% endfor %} /     </tbody> /   </table> / {% endblock %}
+[/TABLE]
+[Normal] 6. Страница заказа orders/templates/orders/order_detail.html:
+[TABLE]
+{% extends "base.html" %} /  / {% block title %}Заказ №{{ order.pk }} — {{ block.super }}{% endblock %} /  / {% block content %} /   <a href="{% url 'orders:list' %}">← Мои заказы</a> /   <h1 class="h3 mt-2">Заказ №{{ order.pk }}</h1> /   <p> /     Статус: <strong>{{ order.get_status_display }}</strong><br> /     Оформлен: {{ order.created_at|date:"d.m.Y H:i" }}<br> /     Получатель: {{ order.full_name }}, {{ order.phone }}<br> /     Адрес: {{ order.address }} /   </p> /   {% if order.comment %}<p class="text-muted">{{ order.comment|linebreaksbr }}</p>{% endif %} /  /   <table class="table"> /     <thead><tr><th>Товар</th><th>Цена</th><th>Кол-во</th><th>Сумма</th></tr></thead> /     <tbody> /       {% for item in order.items.all %} /         <tr> /           <td>{{ item.product.name }}</td> /           <td class="text-nowrap">{{ item.price|floatformat:"-2g" }} ₽</td> /           <td>{{ item.quantity }}</td> /           <td class="text-nowrap">{{ item.total|floatformat:"-2g" }} ₽</td> /         </tr> /       {% endfor %} /     </tbody> /     <tfoot> /       <tr><th colspan="3" class="text-end">Итого:</th><th class="text-nowrap">{{ order.total_price|floatformat:"-2g" }} ₽</th></tr> /     </tfoot> /   </table> /  /   {% if order.can_be_cancelled %} /     <form method="post" action="{% url 'orders:cancel' order.pk %}"> /       {% csrf_token %} /       <button class="btn btn-outline-danger" type="submit">Отменить заказ</button> /     </form> /   {% endif %} / {% endblock %}
+[/TABLE]
+[Normal] 7. Ссылки:
+[List Bullet] в cart/templates/cart/detail.html после ссылки «← Продолжить покупки»:
+[TABLE]
+<a class="btn btn-success" href="{% url 'orders:checkout' %}">Оформить заказ</a>
+[/TABLE]
+[List Bullet] в base.html сразу после {% if user.is_authenticated %}:
+[TABLE]
+<a class="nav-link" href="{% url 'orders:list' %}">Мои заказы</a>
+[/TABLE]
+[Normal] 8. Проверить полный сценарий покупки:
+[List Bullet] без входа нажать «Оформить заказ»: страница входа, после входа — снова оформление (?next=);
+[List Bullet] отправить пустую форму: ошибки «Обязательное поле»;
+[List Bullet] оформить заказ: перенаправление на страницу заказа, корзина пуста, в admin panel у товаров уменьшился остаток;
+[List Bullet] поменять цену товара в admin panel: в заказе осталась старая цена;
+[List Bullet] отменить заказ: статус «Отменён», остаток вернулся; кнопки отмены больше нет;
+[List Bullet] под другим пользователем открыть адрес чужого заказа: 404.
+[Normal] 9. Проверить откат транзакции. Положить в корзину 3 шт. товара. В admin panel поставить этому товару остаток 1. Оформить заказ: сообщение «Товара … на складе 1 шт., а в корзине 3», в «Мои заказы» нового заказа нет, остаток по-прежнему 1, корзина сохранилась.
+[Heading 1] Часть 6. Практика — панель менеджера (≈15 мин)
+[Normal] Что делаем и зачем: для работы менеджера не нужно писать отдельный интерфейс: admin panel Django после небольшой настройки подходит для внутренних пользователей. Покупатели работают на сайте, сотрудники — в admin panel с ограниченными правами.
+[Normal] 1. orders/admin.py:
+[TABLE]
+from django.contrib import admin /  / from .models import Order, OrderItem / from .services import cancel_order /  /  / class OrderItemInline(admin.TabularInline): /     model = OrderItem /     extra = 0 /     readonly_fields = ("product", "price", "quantity") /     can_delete = False /  /     def has_add_permission(self, request, obj=None): /         return False /  /  / @admin.register(Order) / class OrderAdmin(admin.ModelAdmin): /     list_display = ("__str__", "user", "full_name", "status", "created_at", "total_price") /     list_filter = ("status", "created_at") /     search_fields = ("full_name", "phone", "user__username") /     readonly_fields = ("user", "status", "created_at", "updated_at") /     inlines = [OrderItemInline] /     actions = ["mark_confirmed", "mark_shipped", "mark_done", "cancel"] /  /     def get_queryset(self, request): /         return super().get_queryset(request).select_related("user").prefetch_related("items") /  /     @admin.display(description="Сумма, ₽") /     def total_price(self, order): /         return order.total_price /  /     def _move(self, request, queryset, from_status, to_status): /         updated = queryset.filter(status=from_status).update(status=to_status) /         self.message_user(request, f"Изменено заказов: {updated}") /  /     @admin.action(description="Подтвердить") /     def mark_confirmed(self, request, queryset): /         self._move(request, queryset, Order.Status.NEW, Order.Status.CONFIRMED) /  /     @admin.action(description="Передать в доставку") /     def mark_shipped(self, request, queryset): /         self._move(request, queryset, Order.Status.CONFIRMED, Order.Status.SHIPPED) /  /     @admin.action(description="Отметить выполненными") /     def mark_done(self, request, queryset): /         self._move(request, queryset, Order.Status.SHIPPED, Order.Status.DONE) /  /     @admin.action(description="Отменить и вернуть товары на склад") /     def cancel(self, request, queryset): /         orders = queryset.filter(status__in=[Order.Status.NEW, Order.Status.CONFIRMED]) /         for order in orders: /             cancel_order(order) /         self.message_user(request, f"Отменено заказов: {len(orders)}")
+[/TABLE]
+[TABLE]
+Элемент | Что означает
+TabularInline | строки заказа выводятся таблицей внутри страницы заказа
+readonly_fields, can_delete, has_add_permission | строки заказа нельзя менять, удалять и добавлять: заказ — документ
+"status" в readonly_fields | статус нельзя выставить вручную в карточке: иначе менеджер мог бы поставить «Отменён», не вернув товар на склад. Статус меняется только действиями
+actions | действия над выбранными в списке заказами (выпадающий список над таблицей)
+queryset.filter(status=from_status) | действие меняет только заказы в подходящем статусе: выполнить заказ, минуя доставку, нельзя
+cancel вызывает cancel_order | та же функция, что и у покупателя: правило «отмена возвращает товар» записано в одном месте
+get_queryset с prefetch_related | список заказов с суммами строится за 2 запроса, а не за 1 + N
+[/TABLE]
+[Normal] 2. Создать роль менеджера:
+[List Bullet] Группы → Добавить: Менеджеры, права: Orders | заказ | Can view заказ, Orders | заказ | Can change заказ, Orders | позиция заказа | Can view позиция заказа, Catalog | товар | Can view товар, Catalog | товар | Can change товар. Смесь языков в названиях — нормально: название права Django составляет из английского шаблона и verbose_name модели;
+[List Bullet] Пользователи → Добавить: manager, после сохранения отметить «Статус персонала» (вход в admin panel) и добавить в группу Менеджеры. «Статус суперпользователя» не ставить.
+[Normal] 3. Войти как manager:
+[List Bullet] видны только «Заказы» и «Товары», раздела «Пользователи» нет;
+[List Bullet] на сайте в шапке появилась ссылка «Управление»;
+[List Bullet] выбрать новый заказ, действие «Подтвердить», затем «Передать в доставку». В личном кабинете покупателя статус изменился, кнопки отмены нет;
+[List Bullet] попробовать «Отметить выполненными» новый заказ: «Изменено заказов: 0».
+[Heading 1] Часть 7. Практика — тесты магазина (≈20 мин)
+[Normal] 1. orders/tests.py:
+[TABLE]
+from decimal import Decimal /  / from django.test import TestCase / from django.urls import reverse /  / from accounts.models import User / from catalog.models import Category, Product /  / from .models import Order /  / ORDER_DATA = {"full_name": "Анна Смирнова", "phone": "+7 913 000-00-00", "address": "Новосибирск"} /  /  / class CheckoutTests(TestCase): /     @classmethod /     def setUpTestData(cls): /         category = Category.objects.create(name="Мониторы", slug="monitors") /         cls.product = Product.objects.create( /             category=category, name="Монитор", slug="monitor", price=Decimal("10000"), stock=5 /         ) /         cls.buyer = User.objects.create_user("anna", password="test-pass-123") /         cls.other = User.objects.create_user("boris", password="test-pass-123") /  /     def add_to_cart(self, quantity): /         return self.client.post( /             reverse("cart:add", args=[self.product.pk]), {"quantity": quantity} /         ) /  /     def test_cart_quantity_is_limited_by_stock(self): /         self.add_to_cart(3) /         self.add_to_cart(3) /         self.assertEqual(self.client.session["cart"], {str(self.product.pk): 5}) /  /     def test_checkout_requires_login(self): /         self.add_to_cart(1) /         response = self.client.get(reverse("orders:checkout")) /         self.assertRedirects( /             response, f"{reverse('login')}?next={reverse('orders:checkout')}" /         ) /  /     def test_checkout_creates_order_and_decreases_stock(self): /         self.client.force_login(self.buyer) /         self.add_to_cart(2) /         response = self.client.post(reverse("orders:checkout"), ORDER_DATA) /  /         order = Order.objects.get(user=self.buyer) /         self.assertRedirects(response, order.get_absolute_url()) /         self.assertEqual(order.total_price, Decimal("20000")) /         self.product.refresh_from_db() /         self.assertEqual(self.product.stock, 3) /         self.assertEqual(self.client.session["cart"], {}) /  /     def test_order_keeps_price_at_purchase_time(self): /         self.client.force_login(self.buyer) /         self.add_to_cart(1) /         self.client.post(reverse("orders:checkout"), ORDER_DATA) /         Product.objects.filter(pk=self.product.pk).update(price=Decimal("15000")) /         order = Order.objects.get(user=self.buyer) /         self.assertEqual(order.items.get().price, Decimal("10000")) /  /     def test_out_of_stock_rolls_back_everything(self): /         self.client.force_login(self.buyer) /         self.add_to_cart(4) /         Product.objects.filter(pk=self.product.pk).update(stock=2) /         response = self.client.post(reverse("orders:checkout"), ORDER_DATA) /  /         self.assertRedirects(response, reverse("cart:detail")) /         self.assertFalse(Order.objects.exists()) /         self.product.refresh_from_db() /         self.assertEqual(self.product.stock, 2) /  /     def test_cancel_returns_stock(self): /         self.client.force_login(self.buyer) /         self.add_to_cart(2) /         self.client.post(reverse("orders:checkout"), ORDER_DATA) /         order = Order.objects.get(user=self.buyer) /         self.client.post(reverse("orders:cancel", args=[order.pk])) /  /         order.refresh_from_db() /         self.product.refresh_from_db() /         self.assertEqual(order.status, Order.Status.CANCELLED) /         self.assertEqual(self.product.stock, 5) /  /     def test_foreign_order_is_not_visible(self): /         order = Order.objects.create(user=self.buyer, **ORDER_DATA) /         self.client.force_login(self.other) /         response = self.client.get(order.get_absolute_url()) /         self.assertEqual(response.status_code, 404)
+[/TABLE]
+[Normal] self.client.session — сессия тестового клиента: можно проверить, что лежит в корзине, не разбирая HTML.
+[Normal] 2. Запустить все тесты проекта:
+[TABLE]
+python manage.py test
+[/TABLE]
+[Normal] Ожидаемый результат: Ran 13 tests ... OK (6 из каталога и 7 из заказов).
+[Normal] 3. Убедиться, что тест на транзакцию что-то проверяет. Временно убрать строку @transaction.atomic над place_order и запустить тесты: упадёт test_out_of_stock_rolls_back_everything, потому что заказ сохранится без строк. Вернуть декоратор.
+[Heading 1] Часть 8. Частые проблемы
+[TABLE]
+Симптом | Причина и решение
+Товар добавляется, но корзина остаётся пустой | изменения сессии не сохранились: в Cart.save() нет self.session.modified = True или save() не вызывается
+TypeError: Object of type Decimal is not JSON serializable | в сессию положили Decimal или объект модели. В сессии храните только простые типы: строки, числа, списки, словари. Цены берите из базы при показе корзины
+Количество в корзине «задваивается» после перезагрузки страницы | ключи корзины записаны числами, а читаются строками (или наоборот). Всегда str(product.pk)
+ValueError: Cannot assign "...": "Order.user" must be a "User" instance в тестах | создали пользователя через django.contrib.auth.models.User, а в проекте своя модель. Импортировать from accounts.models import User или get_user_model()
+AttributeError: Manager isn't available; 'auth.User' has been swapped for 'accounts.User' | где-то используется стандартный User напрямую (часто в своей форме регистрации без Meta.model = User)
+После входа открывается /accounts/profile/ с 404 | не задан LOGIN_REDIRECT_URL
+NoReverseMatch: 'orders' is not a registered namespace в шапке | ссылка «Мои заказы» добавлена раньше, чем подключены orders.urls в config/urls.py
+ProtectedError при удалении товара в admin panel | товар есть в заказах (on_delete=PROTECT). Снимите галочку «Показывать в каталоге» вместо удаления
+Заказ оформился, а остаток не уменьшился | update(stock=F(...)) вызван не для той модели или выборки; проверить фильтр pk=product.pk
+Менеджер не видит раздел «Заказы» | у пользователя не стоит «Статус персонала» или группе не выданы права view_order / change_order
+database is locked в SQLite | два процесса одновременно пишут в db.sqlite3 (например, открыт shell с незавершённой транзакцией или запущено два runserver). Закрыть лишнее
+[/TABLE]
+[Heading 1] Часть 9. Итог лабораторной (≈10 мин)
+[Heading 2] Чек-лист сдачи
+[List Bullet] ☐ Корзина в сессии: добавление с учётом остатка, изменение количества, удаление, значок в шапке; добавление только через POST
+[List Bullet] ☐ Регистрация со своей формой; вход и выход; корзина сохраняется при входе
+[List Bullet] ☐ Модели Order и OrderItem, цена копируется в позицию заказа
+[List Bullet] ☐ place_order и cancel_order в services.py, оформление в одной транзакции
+[List Bullet] ☐ Оформление требует входа; заказ уменьшает остатки, отмена их возвращает
+[List Bullet] ☐ При нехватке товара заказ не создаётся, пользователь видит понятное сообщение
+[List Bullet] ☐ Личный кабинет: список и страница заказа, отмена нового заказа; чужой заказ — 404
+[List Bullet] ☐ Группа Менеджеры и пользователь manager: видит только заказы и товары, меняет статус только действиями
+[List Bullet] ☐ python manage.py test — 13 тестов проходят
+[Heading 2] Контрольные вопросы
+[Normal] 1. Где физически хранится корзина? Что хранится в cookie браузера?
+[Normal] 2. Почему ключи корзины — строки? Зачем session.modified = True?
+[Normal] 3. Что произойдёт с корзиной при входе в систему и при выходе? Почему Django поступает именно так?
+[Normal] 4. Что такое транзакция? Что случится без @transaction.atomic, если не хватит третьего товара из пяти?
+[Normal] 5. Что такое гонка при покупке последнего товара? Какие три средства защиты используются в place_order?
+[Normal] 6. Почему в OrderItem хранится цена, если она есть в Product?
+[Normal] 7. Почему у OrderItem.product выбран PROTECT, а у OrderItem.order — CASCADE?
+[Normal] 8. Зачем выносить place_order в services.py, а не писать прямо во view?
+[Normal] 9. Чем prefetch_related отличается от select_related? Где в проекте используется каждый?
+[Normal] 10. Почему статус заказа в admin panel сделан только для чтения?
+[Heading 1] Часть 10. Что получилось
+[Normal] За лабораторные №0.2 и №0.3 собран интернет-магазин, в котором есть всё, что требуется от небольшой корпоративной ИС: несколько ролей с разными правами, справочники, документы с жизненным циклом, учёт остатков с транзакциями, загрузка файлов, поиск, автоматические тесты и команда заполнения демонстрационными данными. Он работает локально на SQLite без Docker.
+[Normal] В основной линии курса этот же путь проходится «по-взрослому»: PostgreSQL в Docker Compose, REST API, фронтенд на React, CI/CD. Модели, сервисный слой и тесты переносятся туда почти без изменений.
+[Heading 1] Часть 11. Итоговое самостоятельное задание
+[Heading 2] 11.1 Что нужно сделать
+[Normal] Каждый студент самостоятельно разрабатывает свой интернет-магазин (или сервис с покупкой и бронированием) по варианту — полноценное веб-приложение на Django с собственным фронтендом на шаблонах, которое запускается на локальной машине на SQLite. Код лабораторных №0.2 и №0.3 можно и нужно брать за основу: задача — перенести и развить решения для своей предметной области.
+[Normal] Вариант складывается из двух частей:
+[List Bullet] предметная область (домен) — что продаёт магазин и какое у него особое бизнес-правило. Определяется по первой букве фамилии;
+[List Bullet] модуль — дополнительная подсистема. Определяется по первой букве имени.
+[Normal] Шифр варианта записывается как Д<номер домена>-М<номер модуля>, например Д2-М1.
+[Heading 2] 11.2 Как определить свой вариант
+[Normal] Буквы берутся из написания фамилии и имени в списке группы (журнале). Буква «Ё» считается как «Е», «Й» — как «И».
+[Normal] Домен — по первой букве фамилии:
+[TABLE]
+Первая буква фамилии | Домен
+К | Д1. Книжный магазин
+С | Д2. Спортивные товары
+П | Д3. Продукты с доставкой по времени
+М | Д4. Мебель
+Б | Д5. Билеты на мероприятия
+А, В | Д6. Аптека
+Г, Д | Д7. Цветы и подарки
+Е, Ж, З, И | Д8. Прокат инструмента
+Л, Н | Д9. Онлайн-школа
+О, Р, Т | Д10. Доставка еды из кафе
+У, Ф, Х, Ц, Ч | Д11. Автозапчасти
+Ш, Щ, Э, Ю, Я | Д12. Маркетплейс мастеров
+[/TABLE]
+[Normal] Модуль — по первой букве имени:
+[TABLE]
+Первая буква имени | Модуль
+А | М1. Отзывы и рейтинг
+Б, В, Г, Д, Е, Ж, З | М2. Промокоды и скидки
+И, К, Л, М | М3. Избранное и уведомления о поступлении
+Н, О, П, Р, С, Т, У, Ф, Х, Ц, Ч, Ш, Щ, Э, Ю, Я | М4. Отчёты для менеджера
+[/TABLE]
+[Normal] Группы букв подобраны так, чтобы домены и модули распределялись по студентам примерно поровну: на частые буквы (К, С, П, М) приходится по одному домену, на редкие — по несколько.
+[Normal] Примеры: Смирнова Анна → Д2-М1 (спорттовары, отзывы). Иванов Пётр → Д8-М4 (прокат, отчёты). Ким Дмитрий → Д1-М2 (книги, промокоды).
+[Normal] Если варианты совпали. Внутри одной академической группы шифры не должны повторяться. Порядок разрешения совпадений:
+[Normal] 1. Студенты группы выписываются в порядке списка группы (по алфавиту фамилий), у каждого вычисляется шифр.
+[Normal] 2. Шифр сохраняет тот, кто стоит в списке раньше.
+[Normal] 3. Следующему с таким же шифром номер модуля увеличивается на 1 по кругу (М4 → М1), пока шифр не станет свободным.
+[Normal] 4. Если в домене заняты все четыре модуля, берётся следующий домен (Д12 → Д1) с исходным модулем, и проверка повторяется.
+[Normal] Пример: в группе Иванов Пётр и Ильин Сергей. У обоих Д8-М4. Иванов раньше по алфавиту, он сохраняет Д8-М4. Ильину модуль сдвигается: Д8-М1, если этот шифр свободен.
+[Normal] Староста группы до первой контрольной точки составляет таблицу «ФИО — буквы — шифр» и присылает преподавателю, преподаватель утверждает. После утверждения вариант не меняется. В разных академических группах варианты могут совпадать, но работы сравниваются между собой (п. 11.7).
+[Normal] Своя тема. Вместо домена по варианту можно предложить свою предметную область: например, ту, с которой вы работаете или собираетесь работать. Условия:
+[List Bullet] тема согласуется с преподавателем до первой контрольной точки, после этого меняется только домен, модуль остаётся по имени;
+[List Bullet] в теме есть товары или услуги, корзина или бронирование, заказ с позициями и учётом остатков (мест, экземпляров, слотов), и предложено собственное бизнес-правило не проще, чем у доменов из таблицы;
+[List Bullet] нельзя: магазин компьютерной техники из лабораторных, блог, список задач, любая тема без оформления заказа;
+[List Bullet] тема не должна совпадать с темой другого студента группы.
+[Heading 2] 11.3 Обязательная часть (для всех вариантов)
+[TABLE]
+№ | Требование
+1 | Отдельный проект в своём Git-репозитории (GitHub, GitVerse или GitFlic); README.md с описанием и инструкцией запуска; requirements.txt; .gitignore (без venv/, db.sqlite3, media/)
+2 | Своя модель пользователя с первой миграции
+3 | Не меньше 5 собственных моделей (не считая пользователя), не меньше 4 связей ForeignKey, хотя бы одно поле с choices, хотя бы одно ограничение на уровне базы (CheckConstraint или UniqueConstraint)
+4 | Каталог: список с постраничным выводом, фильтр по категории и хотя бы по одному атрибуту своего домена, поиск без учёта регистра (в том числе для кириллицы), не меньше двух вариантов сортировки, страница объекта с фото
+5 | Корзина (или аналог: бронь, запись) в сессии с учётом доступного количества
+6 | Оформление заказа в одной транзакции: проверка доступности, списание остатков, снимок цены; при ошибке — откат и понятное сообщение
+7 | Регистрация, вход, выход; личный кабинет: история заказов, страница заказа, отмена по правилам; чужие заказы недоступны (404)
+8 | Три роли: покупатель, менеджер (персонал + группа с ограниченными правами), администратор. Менеджер работает в admin panel: list_display, фильтры, поиск, inline, не меньше двух действий (actions); статусы меняются только допустимыми переходами
+9 | Команда python manage.py seed_demo: создаёт не меньше 20 объектов каталога, справочники и демонстрационных пользователей (покупатель и менеджер, логины и пароли указаны в README). Повторный запуск не создаёт дублей
+10 | Общий base.html с наследованием, свои стили в static/, сообщения messages; ни одно действие пользователя не приводит к ошибке 500
+11 | Не меньше 10 тестов, все проходят. Обязательно есть тесты на: права доступа, оформление заказа, бизнес-правило домена, ключевое правило модуля
+12 | Бизнес-правило домена (п. 11.4)
+13 | Модуль по варианту (п. 11.5)
+[/TABLE]
+[Heading 2] 11.4 Домены
+[Normal] Для каждого домена указаны обязательные сущности (сверх категорий, заказов и позиций заказа), атрибут для фильтра каталога и бизнес-правило, которое должно быть реализовано и покрыто тестом.
+[Normal] Д1. Книжный магазин. Сущности: книга, автор (у книги может быть несколько авторов — ManyToManyField), издательство, жанр. Фильтры: автор, год издания. Правило: у книги есть возрастная маркировка (0+, 6+, 12+, 16+, 18+); в модели пользователя есть дата рождения. Книги 18+ нельзя оформить в заказ, если у покупателя не указана дата рождения или ему меньше 18 лет: при оформлении — понятное сообщение, заказ не создаётся.
+[Normal] Д2. Спортивные товары. Сущности: товар, бренд, вариант товара (размер и остаток для каждого размера). Фильтры: бренд, наличие нужного размера. Правило: в корзину кладётся конкретный размер; остаток хранится и списывается у варианта; товар, у которого ни один размер не в наличии, показывается как «нет в наличии», и его нельзя положить в корзину.
+[Normal] Д3. Продукты с доставкой по времени. Сущности: товар (с единицей измерения: шт., кг, л), слот доставки (дата, интервал времени, максимальное число заказов). Фильтры: единица измерения, «только в наличии». Правило: минимальная сумма заказа 1000 ₽; при оформлении покупатель выбирает слот на ближайшие 3 дня; заполненные и прошедшие слоты выбрать нельзя; проверка заполненности слота — внутри транзакции оформления.
+[Normal] Д4. Мебель. Сущности: товар, материал или цвет (вариант исполнения со своей ценой), зона доставки (название, стоимость). Фильтры: материал, диапазон цены. Правило: стоимость доставки зависит от выбранной зоны; при сумме товаров от 50 000 ₽ доставка бесплатная; опция «сборка» добавляет 10 % к стоимости товаров. Стоимость товаров, доставки и сборки сохраняются в заказе отдельными полями.
+[Normal] Д5. Билеты на мероприятия. Сущности: площадка, мероприятие (дата и время), категория мест на мероприятии (название, цена, количество мест). Фильтры: площадка, дата. Правило: прошедшие мероприятия не показываются в афише, и билеты на них купить нельзя (проверка и при оформлении); в одном заказе не больше 6 билетов на одно мероприятие; места списываются по категориям.
+[Normal] Д6. Аптека. Сущности: препарат (форма выпуска, признак «рецептурный»), действующее вещество, пункт выдачи (адрес, часы работы). Фильтры: форма выпуска, действующее вещество. Правило: способ получения — доставка или самовывоз из пункта выдачи; если в корзине есть рецептурный препарат, доставка недоступна (только самовывоз), а покупатель предупреждается об этом ещё в корзине.
+[Normal] Д7. Цветы и подарки. Сущности: товар (букет, подарок), повод (день рождения, 8 марта и т.п.; у товара может быть несколько поводов — ManyToManyField), открытка. Фильтры: повод, ценовой диапазон. Правило: дата и время доставки — не раньше чем через 3 часа от момента оформления и не позже чем через 30 дней, только с 9:00 до 21:00; текст открытки до 200 символов. Все проверки — в форме оформления с понятными ошибками.
+[Normal] Д8. Прокат инструмента. Сущности: модель инструмента (цена за сутки, залог), экземпляр (инвентарный номер, состояние), бронь (экземпляр, дата начала, дата окончания). Фильтры: категория, «свободен на даты». Правило: покупатель выбирает даты; нельзя забронировать экземпляр на период, пересекающийся с существующей бронью (проверка пересечения — запросом к базе внутри транзакции); стоимость = цена за сутки × число суток + залог.
+[Normal] Д9. Онлайн-школа. Сущности: курс, преподаватель, поток (дата старта, лимит мест), урок (материалы курса). Фильтры: преподаватель, дата старта. Правило: запись на поток с ограничением мест; нельзя купить один и тот же курс повторно, пока предыдущая запись не отменена; материалы уроков видны только тем, чей заказ менеджер перевёл в статус «Оплачен» (такой статус нужно добавить в модель заказа).
+[Normal] Д10. Доставка еды из кафе. Сущности: блюдо, раздел меню, добавка (своя цена; у блюда — набор доступных добавок через ManyToManyField). Фильтры: раздел, «вегетарианское», «острое». Правило: заказы принимаются только с 10:00 до 22:00 по времени сервера; минимальная сумма 700 ₽; одно и то же блюдо с разным набором добавок — разные позиции корзины и заказа, цена позиции учитывает добавки.
+[Normal] Д11. Автозапчасти. Сущности: запчасть, производитель, марка и модель автомобиля (годы выпуска), совместимость запчасти с моделями (ManyToManyField). Фильтры: марка → модель → год. Правило: у покупателя есть «гараж» — сохранённые автомобили, по которым каталог фильтруется в один клик; при оформлении заказа покупатель получает предупреждение, если запчасть не совместима ни с одним автомобилем из его гаража.
+[Normal] Д12. Маркетплейс мастеров. Сущности: мастер (профиль, связанный с пользователем), изделие (принадлежит мастеру), заказ с позициями от разных мастеров, у каждой позиции свой статус. Фильтры: мастер, материал. Правило: мастера (группа «Мастера») работают на сайте, а не в admin panel: видят и редактируют только свои изделия, видят только позиции заказов со своими изделиями и меняют статус только этих позиций. Чужое изделие или чужая позиция — 404.
+[Heading 2] 11.5 Модули
+[Normal] М1. Отзывы и рейтинг.
+[List Bullet] Модель отзыва: товар, автор, оценка от 1 до 5, текст, дата, признак «одобрен».
+[List Bullet] Оставить отзыв может только покупатель, у которого есть выполненный заказ с этим товаром; один отзыв на товар от одного покупателя (UniqueConstraint).
+[List Bullet] Отзыв появляется на сайте после одобрения менеджером (действие в admin panel).
+[List Bullet] В каталоге и на странице товара — средняя оценка и число отзывов, посчитанные в базе (annotate с Avg и Count), сортировка «по рейтингу».
+[Normal] М2. Промокоды и скидки.
+[List Bullet] Модель промокода: код, тип скидки (процент или фиксированная сумма), размер, период действия, лимит использований, минимальная сумма заказа, признак активности.
+[List Bullet] Промокод вводится в корзине и хранится в сессии; каждое невыполненное условие — своё понятное сообщение (истёк, исчерпан, сумма меньше минимальной и т.д.).
+[List Bullet] Скидка не может быть больше суммы заказа; код и сумма скидки сохраняются в заказе.
+[List Bullet] Счётчик использований увеличивается в той же транзакции, что и оформление заказа (F()); промокод с исчерпанным лимитом не применяется, даже если его успели положить в корзину.
+[Normal] М3. Избранное и уведомления о поступлении.
+[List Bullet] Избранное: добавить и убрать товар (POST), страница «Избранное», отметка на карточках каталога; пара «пользователь — товар» уникальна.
+[List Bullet] Модель уведомления: пользователь, текст, ссылка, дата, признак «прочитано».
+[List Bullet] Когда остаток товара меняется с 0 на положительный (менеджер пополнил склад в admin panel), всем, у кого товар в избранном, создаётся уведомление «Товар снова в наличии».
+[List Bullet] Счётчик непрочитанных уведомлений в шапке, страница уведомлений, отметка «прочитано».
+[Normal] М4. Отчёты для менеджера.
+[List Bullet] Страница /reports/ доступна только группе «Менеджеры» и администратору; остальным — 403.
+[List Bullet] Выбор периода (с — по, по умолчанию последние 30 дней) через форму с проверкой дат.
+[List Bullet] Выручка по дням без учёта отменённых заказов, число заказов по статусам, топ-10 товаров по выручке.
+[List Bullet] Все расчёты — агрегатами в базе данных (annotate, aggregate, Sum, Count, TruncDate), а не циклами в Python; выгрузка отчёта в CSV.
+[Heading 2] 11.6 Контрольные точки
+[Normal] Конкретные даты объявляет преподаватель. Ориентир — отсчёт от занятия, на котором выдано задание:
+[TABLE]
+Точка | Срок | Что должно быть в репозитории
+КТ1. Проект и модель данных | неделя 1 | утверждённый шифр (или тема); README с разделом «О проекте»: роли, 5–10 сценариев вида «Покупатель может…», список моделей с полями и связями, схема базы данных (рисунок или Mermaid); каркас проекта, своя модель пользователя, модели и миграции; преподаватель приглашён в репозиторий
+КТ2. Каталог | неделя 3 | витрина (требование 4), admin panel для каталога, команда seed_demo, не меньше 5 тестов
+КТ3. Заказы и модуль | неделя 4 | корзина, оформление, личный кабинет, менеджер, бизнес-правило домена, модуль, не меньше 10 тестов
+Защита | неделя 5 | итоговая версия, тег v1.0 в Git
+[/TABLE]
+[Normal] На каждой контрольной точке преподаватель смотрит репозиторий и даёт замечания. Точка считается пройденной, если к сроку в репозитории есть перечисленное.
+[Heading 2] 11.7 Как проходит приёмка
+[Normal] Защита занимает около 15 минут и идёт по одному протоколу для всех.
+[Normal] 1. Развёртывание с нуля по README. Преподаватель (или студент на компьютере в аудитории) клонирует репозиторий в пустую папку и выполняет только команды из README: создание окружения, pip install -r requirements.txt, migrate, seed_demo, runserver. Если проект не запускается за 10 минут по инструкции, защита переносится.
+[Normal] 2. Автоматические проверки: python manage.py check, python manage.py makemigrations --check (нет забытых миграций), python manage.py test (все тесты проходят). Если тесты не проходят, защита переносится.
+[Normal] 3. Сценарий покупателя: регистрация, поиск и фильтры, корзина, оформление, личный кабинет, отмена.
+[Normal] 4. Сценарий менеджера: вход демонстрационным менеджером, обработка заказа действиями, проверка, что лишних разделов нет.
+[Normal] 5. Негативные проверки: чужой заказ по прямой ссылке, оформление без входа, количество больше остатка, нарушение бизнес-правила домена, недопустимое применение модуля (например, просроченный промокод). Ожидается понятное сообщение или 403/404, но не ошибка 500.
+[Normal] 6. Вопросы по коду. Преподаватель открывает 2–3 места в коде и просит объяснить, что там происходит и почему сделано так.
+[Normal] 7. Доработка на месте (до 10 минут): небольшое изменение по заданию преподавателя. Например, добавить поле в модель и вывести его на странице, добавить вариант сортировки, изменить порог в бизнес-правиле и поправить тест.
+[Normal] Правила:
+[List Bullet] код лабораторных можно использовать как основу, это ожидается;
+[List Bullet] пользоваться документацией, примерами и ИИ-ассистентами можно, но студент отвечает за каждую строку проекта. Если студент не может объяснить фрагмент своего кода, баллы за соответствующий критерий не засчитываются;
+[List Bullet] история Git должна отражать работу: не меньше 15 коммитов, распределённых по контрольным точкам. Один большой коммит в конце — 0 баллов за критерий «Git и качество кода» и дополнительные вопросы на защите;
+[List Bullet] если в работах разных студентов найден совпадающий код (кроме кода лабораторных), обе работы защищаются повторно с расширенной доработкой на месте.
+[Heading 2] 11.8 Оценивание
+[TABLE]
+Критерий | Баллы
+Развёртывание по README, seed_demo, демонстрационные пользователи | 5
+Модель данных: требования 2–3, миграции, ограничения | 10
+Каталог: фильтры, поиск, сортировка, страницы, фото | 10
+Корзина и оформление заказа: транзакция, остатки, снимок цены, откат | 15
+Личный кабинет, роли и права: 403/404, менеджер с ограниченными правами, допустимые переходы статусов | 10
+Бизнес-правило домена | 10
+Модуль | 15
+Тесты: не меньше 10, осмысленные, все проходят | 10
+Git и качество кода: история коммитов, понятные имена, нет мёртвого кода и закомментированных кусков | 5
+Защита: ответы на вопросы и доработка на месте | 10
+Итого | 100
+[/TABLE]
+[TABLE]
+Баллы | Оценка
+85–100 | отлично
+70–84 | хорошо
+55–69 | удовлетворительно
+меньше 55 | работа возвращается на доработку
+[/TABLE]
+[Normal] Пропуск контрольной точки — минус 5 баллов за каждую (не больше 15 в сумме). Работа не принимается к защите, если не выполнены пункты 1 и 2 протокола приёмки.

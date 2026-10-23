@@ -1,0 +1,318 @@
+[Title] Лабораторная работа №0.2: Интернет-магазин на Django — каталог товаров
+[Normal] Продолжительность: ~3–3,5 часа (2 семинара; что не успели на занятии, доделывается дома)
+[Normal] Цель: начать новый проект — интернет-магазин, который к концу лабораторной №0.3 станет полноценным: каталог, корзина, заказы, личный кабинет, панель менеджера. В этой работе собираем витрину: проект из нескольких приложений, своя модель пользователя с первого дня, категории и товары с фотографиями, статические и медиафайлы, команда заполнения каталога демонстрационными данными, поиск, сортировка, постраничный вывод и тесты.
+[Normal] Что понадобится: Python 3.12 или новее, умение создавать виртуальное окружение (лабораторная №0), опыт работы с шаблонами, формами и входом в систему (лабораторная №0.1), Git, доступ в интернет для установки пакетов и подключения стилей Bootstrap.
+[Normal] Все команды выполняются в папке проекта при активированном окружении ((venv) в начале строки). Команды одинаковы для Windows, Linux и macOS, кроме создания и активации окружения: для них см. часть 3 лабораторной №0.
+[Heading 1] Часть 1. Теория (≈15 мин)
+[Heading 2] 1.1 Интернет-магазин как информационная система
+[Normal] Интернет-магазин — удобный учебный пример корпоративной ИС: в нём есть всё, что встречается в реальных системах. Несколько ролей пользователей, справочники, учёт остатков, документы (заказы) со своим жизненным циклом и операции, которые должны выполняться целиком или не выполняться вовсе.
+[TABLE]
+Роль | Что делает
+Покупатель | смотрит каталог, ищет товары, кладёт их в корзину, оформляет заказ, видит историю своих заказов
+Менеджер | ведёт товары и остатки, обрабатывает заказы: подтверждает, передаёт в доставку, отменяет
+Администратор | управляет пользователями, правами и справочниками
+[/TABLE]
+[TABLE]
+Лабораторная | Что появится в магазине
+№0.2 (эта) | каталог: категории, товары, фото, поиск, сортировка, страницы, тесты
+№0.3 | корзина, регистрация, оформление заказа со списанием остатков, личный кабинет, панель менеджера, тесты; итоговое самостоятельное задание
+[/TABLE]
+[Heading 2] 1.2 Проект из нескольких приложений
+[Normal] В лабораторных №0 и №0.1 всё жило в одном приложении helpdesk. Магазин делим на приложения по предметным областям:
+[TABLE]
+Приложение | За что отвечает | Когда появится
+accounts | пользователи, регистрация, вход | эта лаба (модель), №0.3 (регистрация)
+catalog | категории и товары, витрина | эта лаба
+cart | корзина покупателя | №0.3
+orders | заказы и их обработка | №0.3
+[/TABLE]
+[Normal] Каждое приложение — отдельная папка со своими моделями, view, шаблонами и тестами. Так код проще читать, а приложение при необходимости можно перенести в другой проект.
+[Normal] Когда приложений несколько, имена маршрутов могут совпасть: detail может быть и у товара, и у заказа. Поэтому у маршрутов приложения задают пространство имён (app_name = "catalog"), и в шаблонах пишут {% url 'catalog:product_detail' ... %}.
+[Heading 2] 1.3 Статические и медиафайлы
+[TABLE]
+ | Статические файлы (static) | Медиафайлы (media)
+Что это | CSS, JavaScript, иконки, картинки оформления | файлы, которые загрузили пользователи: фото товаров, документы
+Кто создаёт | разработчик | пользователи и менеджеры через сайт
+Хранятся в Git | да | нет, папку media/ добавляют в .gitignore
+Настройки | STATIC_URL, STATICFILES_DIRS | MEDIA_URL, MEDIA_ROOT
+Кто отдаёт при разработке | runserver сам | runserver, если подключить в urls.py (см. часть 2)
+Кто отдаёт в продакшене | веб-сервер (nginx), не Django | веб-сервер или объектное хранилище (S3)
+[/TABLE]
+[Heading 2] 1.4 Своя модель пользователя — с первого дня
+[Normal] В лабораторной №0.1 мы использовали стандартную модель User, а в лабораторной №3 видно, как тяжело заменить её в работающем проекте. Документация Django прямо рекомендует: в каждом новом проекте сразу создавать свою модель пользователя, даже если пока она ничем не отличается от стандартной. Тогда позже можно спокойно добавить в неё поля (телефон, дату рождения, адрес доставки), не пересоздавая базу. Делаем это до первой команды migrate.
+[Heading 1] Часть 2. Практика — новый проект (≈25 мин)
+[Normal] Что делаем и зачем: создаём проект shop с нуля, ставим Django и библиотеку для работы с изображениями, настраиваем язык, шаблоны, статику, медиафайлы и свою модель пользователя.
+[Normal] 1. Создать папку проекта и виртуальное окружение (подробно — в части 3 лабораторной №0):
+[TABLE]
+ОС | Команды
+Windows (PowerShell) | mkdir C:\dev\shop, cd C:\dev\shop, py -m venv venv, venv\Scripts\Activate.ps1
+Linux / macOS | mkdir -p ~/dev/shop && cd ~/dev/shop, python3 -m venv venv, source venv/bin/activate
+[/TABLE]
+[Normal] 2. Установить Django и Pillow — библиотеку для работы с изображениями. Без неё Django не позволит использовать в моделях поле ImageField:
+[TABLE]
+python -m pip install --upgrade pip / python -m pip install django pillow / python -m pip freeze > requirements.txt
+[/TABLE]
+[Normal] 3. Создать проект и два первых приложения:
+[TABLE]
+django-admin startproject config . / python manage.py startapp accounts / python manage.py startapp catalog
+[/TABLE]
+[Normal] 4. Создать в корне проекта папки для общих шаблонов, статических и медиафайлов:
+[TABLE]
+ОС | Команда
+Windows (PowerShell) | mkdir templates, static\css, static\img, media
+Linux / macOS | mkdir -p templates static/css static/img media
+[/TABLE]
+[Normal] 5. Отредактировать config/settings.py. Свежий Django генерирует его с одинарными кавычками, новые строки можно писать с любыми: для Python это одно и то же.
+[List Bullet] подключить приложения:
+[TABLE]
+INSTALLED_APPS = [ /     # ... стандартные приложения django.contrib ... /     "django.contrib.staticfiles", /     "accounts", /     "catalog", / ]
+[/TABLE]
+[List Bullet] в TEMPLATES указать папку общих шаблонов проекта:
+[TABLE]
+"DIRS": [BASE_DIR / "templates"],
+[/TABLE]
+[List Bullet] язык и часовой пояс:
+[TABLE]
+LANGUAGE_CODE = "ru-ru" / TIME_ZONE = "Asia/Novosibirsk"
+[/TABLE]
+[List Bullet] после строки STATIC_URL = ... добавить:
+[TABLE]
+STATICFILES_DIRS = [BASE_DIR / "static"] /  / MEDIA_URL = "media/" / MEDIA_ROOT = BASE_DIR / "media" /  / AUTH_USER_MODEL = "accounts.User"
+[/TABLE]
+[TABLE]
+Настройка | Что означает
+TEMPLATES["DIRS"] | где искать шаблоны, кроме папок templates/ внутри приложений. Сюда положим base.html, общий для всех приложений магазина
+STATICFILES_DIRS | папки со статикой проекта (кроме папок static/ внутри приложений)
+MEDIA_URL, MEDIA_ROOT | по какому адресу и в какой папке на диске хранятся загруженные файлы
+AUTH_USER_MODEL | какая модель используется для пользователей. Задаётся до первой миграции
+[/TABLE]
+[Normal] 6. Своя модель пользователя. accounts/models.py:
+[TABLE]
+from django.contrib.auth.models import AbstractUser /  /  / class User(AbstractUser): /     """Пользователь магазина. Пока ничем не отличается от стандартного."""
+[/TABLE]
+[Normal] accounts/admin.py — регистрируем её со стандартным оформлением раздела пользователей:
+[TABLE]
+from django.contrib import admin / from django.contrib.auth.admin import UserAdmin /  / from .models import User /  / admin.site.register(User, UserAdmin)
+[/TABLE]
+[Normal] 7. config/urls.py — разрешаем runserver отдавать загруженные файлы. Только в режиме разработки (DEBUG = True), в продакшене этим займётся веб-сервер:
+[TABLE]
+from django.conf import settings / from django.conf.urls.static import static / from django.contrib import admin / from django.urls import path /  / urlpatterns = [ /     path("admin/", admin.site.urls), / ] /  / if settings.DEBUG: /     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+[/TABLE]
+[Normal] 8. Создать миграции, базу и суперпользователя:
+[TABLE]
+python manage.py makemigrations accounts / python manage.py migrate / python manage.py createsuperuser
+[/TABLE]
+[Normal] Порядок важен: сначала миграция accounts, потом migrate. Если запустить migrate раньше, Django создаст таблицы для стандартного пользователя, и дальше будет ошибка InconsistentMigrationHistory (как в лабораторной №3). Решение на этом этапе простое: удалить db.sqlite3 и повторить.
+[Normal] 9. Создать .gitignore и первый коммит:
+[TABLE]
+venv/ / __pycache__/ / *.pyc / db.sqlite3 / media/
+[/TABLE]
+[TABLE]
+git init / git add . / git commit -m "Проект магазина: настройки и своя модель пользователя"
+[/TABLE]
+[Heading 1] Часть 3. Практика — модели каталога (≈25 мин)
+[Normal] Что делаем и зачем: описываем две главные сущности витрины: категорию и товар.
+[Normal] 1. catalog/models.py:
+[TABLE]
+from decimal import Decimal /  / from django.core.validators import MinValueValidator / from django.db import models / from django.urls import reverse /  /  / class Category(models.Model): /     name = models.CharField("Название", max_length=100, unique=True) /     slug = models.SlugField("Адрес (slug)", max_length=100, unique=True) /     description = models.TextField("Описание", blank=True) /  /     class Meta: /         verbose_name = "категория" /         verbose_name_plural = "категории" /         ordering = ["name"] /  /     def __str__(self): /         return self.name /  /     def get_absolute_url(self): /         return reverse("catalog:product_list_by_category", args=[self.slug]) /  /  / class Product(models.Model): /     category = models.ForeignKey( /         Category, /         verbose_name="Категория", /         on_delete=models.PROTECT, /         related_name="products", /     ) /     name = models.CharField("Название", max_length=200) /     slug = models.SlugField("Адрес (slug)", max_length=200, unique=True) /     description = models.TextField("Описание", blank=True) /     price = models.DecimalField( /         "Цена, ₽", /         max_digits=10, /         decimal_places=2, /         validators=[MinValueValidator(Decimal("0.01"))], /     ) /     stock = models.PositiveIntegerField("Остаток на складе", default=0) /     image = models.ImageField("Фото", upload_to="products/", blank=True) /     is_active = models.BooleanField("Показывать в каталоге", default=True) /     search_index = models.TextField(editable=False, blank=True) /     created_at = models.DateTimeField("Добавлен", auto_now_add=True) /     updated_at = models.DateTimeField("Изменён", auto_now=True) /  /     class Meta: /         verbose_name = "товар" /         verbose_name_plural = "товары" /         ordering = ["name"] /         constraints = [ /             models.CheckConstraint( /                 condition=models.Q(price__gt=0), name="product_price_positive" /             ), /         ] /  /     def __str__(self): /         return self.name /  /     def save(self, *args, **kwargs): /         self.search_index = f"{self.name} {self.description}".lower() /         super().save(*args, **kwargs) /  /     def get_absolute_url(self): /         return reverse("catalog:product_detail", args=[self.slug]) /  /     @property /     def in_stock(self): /         return self.stock > 0
+[/TABLE]
+[TABLE]
+Элемент | Что означает
+SlugField | короткое имя латиницей для адреса страницы: /category/laptops/ вместо /category/3/. Такие адреса понятны людям и поисковикам
+DecimalField(max_digits=10, decimal_places=2) | точное десятичное число. Деньги никогда не хранят во FloatField: 0.1 + 0.2 во float равно 0.30000000000000004, и копейки начнут теряться
+PositiveIntegerField | целое число не меньше нуля: остаток не может быть отрицательным
+ImageField(upload_to="products/") | путь к картинке; сам файл лежит в MEDIA_ROOT/products/. Требует Pillow
+is_active | «мягкое» скрытие товара: снять с продажи, не удаляя. Удалить товар, который уже есть в заказах, будет нельзя (см. лабораторную №0.3)
+validators=[MinValueValidator(...)] | проверка в формах и admin panel: пользователь увидит понятную ошибку
+CheckConstraint | то же правило на уровне базы данных: его не обойти даже кодом, который пишет в БД в обход форм
+search_index и save() | служебное поле для поиска, editable=False скрывает его из форм. Зачем оно, разберём в части 7
+@property in_stock | вычисляемое свойство: в шаблоне пишется {{ product.in_stock }} без скобок
+[/TABLE]
+[Normal] В Django 6 параметр ограничения называется condition=. В старых версиях и примерах из интернета встречается check= — он удалён.
+[Normal] 2. catalog/admin.py:
+[TABLE]
+from django.contrib import admin /  / from .models import Category, Product /  /  / @admin.register(Category) / class CategoryAdmin(admin.ModelAdmin): /     list_display = ("name", "slug") /     prepopulated_fields = {"slug": ("name",)} /  /  / @admin.register(Product) / class ProductAdmin(admin.ModelAdmin): /     list_display = ("name", "category", "price", "stock", "is_active") /     list_editable = ("price", "stock", "is_active") /     list_filter = ("is_active", "category") /     search_fields = ("name", "description") /     prepopulated_fields = {"slug": ("name",)} /     list_select_related = ("category",)
+[/TABLE]
+[Normal] prepopulated_fields заполняет slug прямо в браузере, пока вы набираете название. Кириллицу admin panel переводит в латиницу сама: «Мониторы» → monitory. list_editable позволяет менять цену и остаток прямо в списке товаров, не открывая каждую карточку.
+[Normal] 3. Миграция:
+[TABLE]
+python manage.py makemigrations catalog / python manage.py migrate
+[/TABLE]
+[Normal] 4. Проверить ограничение базы данных в python manage.py shell:
+[TABLE]
+from catalog.models import Category, Product /  / c = Category.objects.create(name="Тест", slug="test") / Product.objects.create(category=c, name="Бесплатно", slug="free", price=0)
+[/TABLE]
+[Normal] Получите IntegrityError: CHECK constraint failed: product_price_positive. Удалить тестовую категорию: c.delete(), затем exit().
+[Heading 1] Часть 4. Практика — команда заполнения каталога (≈15 мин)
+[Normal] Что делаем и зачем: чтобы проверять поиск, сортировку и страницы, нужно хотя бы 20 товаров. Вводить их руками долго, а каждому новому разработчику (и преподавателю на защите) пришлось бы делать то же самое. Поэтому пишем свою команду manage.py, которая заполняет каталог одной строкой.
+[Normal] 1. Создать структуру папок с пустыми файлами __init__.py:
+[TABLE]
+catalog/ / └── management/ /     ├── __init__.py /     └── commands/ /         ├── __init__.py /         └── seed_catalog.py
+[/TABLE]
+[Normal] Имя файла в commands/ станет именем команды: python manage.py seed_catalog.
+[Normal] 2. catalog/management/commands/seed_catalog.py:
+[TABLE]
+from decimal import Decimal /  / from django.core.management.base import BaseCommand /  / from catalog.models import Category, Product /  / # (название категории, slug): [(название товара, slug, цена, остаток), ...] / CATALOG = { /     ("Ноутбуки", "laptops"): [ /         ("Ноутбук 14\" Core i3 / 8 ГБ / 256 ГБ", "laptop-14-i3", "38990", 12), /         ("Ноутбук 15,6\" Core i5 / 16 ГБ / 512 ГБ", "laptop-15-i5", "61990", 7), /         ("Ноутбук 16\" Core i7 / 32 ГБ / 1 ТБ", "laptop-16-i7", "104990", 3), /         ("Ноутбук 13\" для учёбы / 8 ГБ / 128 ГБ", "laptop-13-edu", "27490", 0), /     ], /     ("Мониторы", "monitors"): [ /         ("Монитор 24\" IPS Full HD", "monitor-24-fhd", "12990", 15), /         ("Монитор 27\" IPS 2K", "monitor-27-2k", "21990", 9), /         ("Монитор 32\" VA 4K", "monitor-32-4k", "34990", 4), /         ("Монитор 22\" офисный", "monitor-22-office", "8990", 20), /     ], /     ("Клавиатуры и мыши", "input"): [ /         ("Клавиатура проводная офисная", "keyboard-office", "990", 50), /         ("Клавиатура механическая", "keyboard-mechanical", "5490", 11), /         ("Мышь беспроводная", "mouse-wireless", "1290", 40), /         ("Комплект клавиатура + мышь", "keyboard-mouse-set", "2190", 25), /     ], /     ("Накопители", "storage"): [ /         ("SSD 512 ГБ M.2 NVMe", "ssd-512-nvme", "4290", 30), /         ("SSD 1 ТБ M.2 NVMe", "ssd-1tb-nvme", "7490", 18), /         ("Внешний диск 2 ТБ", "hdd-external-2tb", "6990", 6), /         ("Флешка 64 ГБ USB 3.2", "usb-flash-64", "690", 100), /     ], /     ("Сетевое оборудование", "network"): [ /         ("Wi-Fi роутер двухдиапазонный", "router-dual-band", "3990", 14), /         ("Коммутатор 8 портов 1 Гбит/с", "switch-8-port", "2490", 10), /         ("Сетевой кабель 5 м", "patch-cord-5m", "290", 200), /         ("Wi-Fi адаптер USB", "wifi-usb-adapter", "990", 0), /     ], / } /  /  / class Command(BaseCommand): /     help = "Заполняет каталог демонстрационными категориями и товарами" /  /     def handle(self, *args, **options): /         created = 0 /         for (category_name, category_slug), products in CATALOG.items(): /             category, _ = Category.objects.get_or_create( /                 slug=category_slug, defaults={"name": category_name} /             ) /             for name, slug, price, stock in products: /                 _, is_new = Product.objects.get_or_create( /                     slug=slug, /                     defaults={ /                         "category": category, /                         "name": name, /                         "price": Decimal(price), /                         "stock": stock, /                         "description": "Учебный товар. Описание заполняется в admin panel.", /                     }, /                 ) /                 created += is_new /         self.stdout.write(self.style.SUCCESS(f"Готово. Новых товаров: {created}"))
+[/TABLE]
+[TABLE]
+Элемент | Что означает
+BaseCommand, handle() | своя команда manage.py: Django вызовет handle, когда её запустят
+get_or_create(slug=..., defaults=...) | найти запись по slug, а если её нет — создать со значениями из defaults. Возвращает пару (объект, создан ли)
+Decimal(price) | цена из строки, а не из числа с плавающей точкой: Decimal("0.1") точное, Decimal(0.1) уже нет
+self.style.SUCCESS | зелёный текст в терминале
+[/TABLE]
+[Normal] Slug в данных задан явно латиницей. Python-функция django.utils.text.slugify("Ноутбуки") вернула бы пустую строку: в отличие от admin panel, она не транслитерирует кириллицу, а просто выбрасывает её.
+[Normal] 3. Запустить команду дважды:
+[TABLE]
+python manage.py seed_catalog / python manage.py seed_catalog
+[/TABLE]
+[Normal] Первый раз: «Новых товаров: 20». Второй раз: «Новых товаров: 0». Команда идемпотентна: её можно запускать сколько угодно раз, дублей не будет. Это важное свойство для любых скриптов развёртывания.
+[Normal] 4. Зайти в /admin/, посмотреть категории и товары, поменять пару цен прямо в списке товаров.
+[Heading 1] Часть 5. Практика — базовый шаблон и витрина (≈35 мин)
+[Normal] Что делаем и зачем: общий шаблон с меню категорий, собственные стили, страница со списком товаров (всех или одной категории) и страница товара.
+[Normal] 1. Свои стили static/css/shop.css:
+[TABLE]
+.product-card img { /   height: 180px; /   object-fit: contain; /   background: #f8f9fa; / } /  / .product-photo { /   max-height: 400px; /   object-fit: contain; /   background: #f8f9fa; / } /  / .price { /   font-size: 1.25rem; /   font-weight: 600; /   white-space: nowrap; / }
+[/TABLE]
+[Normal] И картинка-заглушка для товаров без фото static/img/no-image.svg:
+[TABLE]
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200"> /   <rect width="300" height="200" fill="#e9ecef"/> /   <text x="150" y="105" font-family="sans-serif" font-size="18" fill="#6c757d" text-anchor="middle">Нет фото</text> / </svg>
+[/TABLE]
+[Normal] 2. Контекстный процессор — функция, которая добавляет переменные в контекст каждого шаблона. Меню категорий нужно на всех страницах, и передавать его из каждого view неудобно. catalog/context_processors.py:
+[TABLE]
+from .models import Category /  /  / def categories(request): /     """Список категорий для меню на каждой странице.""" /     return {"nav_categories": Category.objects.all()}
+[/TABLE]
+[Normal] Подключить в config/settings.py, в конец списка TEMPLATES[0]["OPTIONS"]["context_processors"]:
+[TABLE]
+"catalog.context_processors.categories",
+[/TABLE]
+[Normal] 3. Общий шаблон templates/base.html (в папке проекта, а не приложения):
+[TABLE]
+{% load static %} / <!DOCTYPE html> / <html lang="ru"> / <head> /   <meta charset="utf-8"> /   <meta name="viewport" content="width=device-width, initial-scale=1"> /   <title>{% block title %}Учебный магазин{% endblock %}</title> /   <link rel="stylesheet" /         href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"> /   <link rel="stylesheet" href="{% static 'css/shop.css' %}"> / </head> / <body> /   <nav class="navbar navbar-expand navbar-dark bg-dark"> /     <div class="container"> /       <a class="navbar-brand" href="{% url 'catalog:product_list' %}">Учебный магазин</a> /       <form class="d-flex ms-auto" method="get" action="{% url 'catalog:product_list' %}"> /         <input class="form-control form-control-sm me-2" type="search" name="q" /                value="{{ request.GET.q }}" placeholder="Поиск товаров"> /         <button class="btn btn-outline-light btn-sm" type="submit">Найти</button> /       </form> /     </div> /   </nav> /  /   <div class="bg-light border-bottom mb-4"> /     <div class="container"> /       <ul class="nav"> /         {% for nav_category in nav_categories %} /           <li class="nav-item"> /             <a class="nav-link" href="{{ nav_category.get_absolute_url }}">{{ nav_category.name }}</a> /           </li> /         {% endfor %} /       </ul> /     </div> /   </div> /  /   <main class="container mb-5"> /     {% for message in messages %} /       <div class="alert alert-{% if message.tags == 'error' %}danger{% else %}{{ message.tags }}{% endif %}"> /         {{ message }} /       </div> /     {% endfor %} /  /     {% block content %}{% endblock %} /   </main> / </body> / </html>
+[/TABLE]
+[Normal] {% load static %} подключает тег {% static %}, который превращает путь css/shop.css в адрес /static/css/shop.css. Писать адрес вручную не стоит: в продакшене статика может переехать на другой адрес, и тогда поменяется только настройка STATIC_URL.
+[Normal] 4. View каталога, catalog/views.py:
+[TABLE]
+from django.shortcuts import get_object_or_404, render /  / from .models import Category, Product /  /  / def product_list(request, category_slug=None): /     category = None /     products = Product.objects.filter(is_active=True).select_related("category") /     if category_slug: /         category = get_object_or_404(Category, slug=category_slug) /         products = products.filter(category=category) /     context = {"category": category, "products": products} /     return render(request, "catalog/product_list.html", context) /  /  / def product_detail(request, slug): /     product = get_object_or_404( /         Product.objects.select_related("category"), slug=slug, is_active=True /     ) /     return render(request, "catalog/product_detail.html", {"product": product})
+[/TABLE]
+[Normal] Один view обслуживает и весь каталог, и одну категорию: параметр category_slug по умолчанию None. Скрытые товары (is_active=False) не попадают ни в список, ни на свою страницу: по прямой ссылке будет 404.
+[Normal] 5. Маршруты приложения catalog/urls.py:
+[TABLE]
+from django.urls import path /  / from . import views /  / app_name = "catalog" /  / urlpatterns = [ /     path("", views.product_list, name="product_list"), /     path("category/<slug:category_slug>/", views.product_list, name="product_list_by_category"), /     path("product/<slug:slug>/", views.product_detail, name="product_detail"), / ]
+[/TABLE]
+[Normal] и подключение в config/urls.py (не забыть добавить include в импорт):
+[TABLE]
+from django.urls import include, path
+[/TABLE]
+[TABLE]
+urlpatterns = [ /     path("admin/", admin.site.urls), /     path("", include("catalog.urls")), / ]
+[/TABLE]
+[Normal] 6. Карточка товара — фрагмент, который будет использоваться в нескольких местах, catalog/templates/catalog/_product_card.html:
+[TABLE]
+{% load static %} / <div class="card h-100 product-card"> /   <a href="{{ product.get_absolute_url }}"> /     {% if product.image %} /       <img class="card-img-top" src="{{ product.image.url }}" alt="{{ product.name }}"> /     {% else %} /       <img class="card-img-top" src="{% static 'img/no-image.svg' %}" alt="Нет фото"> /     {% endif %} /   </a> /   <div class="card-body d-flex flex-column"> /     <a class="card-title text-decoration-none text-body mb-2" href="{{ product.get_absolute_url }}">{{ product.name }}</a> /     <div class="mt-auto"> /       <div class="price">{{ product.price|floatformat:"-2g" }} ₽</div> /       {% if product.in_stock %} /         <small class="text-success">В наличии: {{ product.stock }} шт.</small> /       {% else %} /         <small class="text-danger">Нет в наличии</small> /       {% endif %} /     </div> /   </div> / </div>
+[/TABLE]
+[Normal] Фильтр floatformat:"-2g": -2 — показать копейки, только если они не нулевые; g — разделить разряды по правилам языка. Цена 104990.00 выводится как «104 990», а 990.50 — как «990,50».
+[Normal] 7. Список товаров catalog/templates/catalog/product_list.html:
+[TABLE]
+{% extends "base.html" %} /  / {% block title %}{{ category.name|default:"Каталог" }} — {{ block.super }}{% endblock %} /  / {% block content %} /   <h1 class="h3 mb-3">{{ category.name|default:"Все товары" }}</h1> /   {% if category.description %} /     <p class="text-muted">{{ category.description }}</p> /   {% endif %} /  /   <div class="row row-cols-1 row-cols-sm-2 row-cols-lg-4 g-3"> /     {% for product in products %} /       <div class="col"> /         {% include "catalog/_product_card.html" %} /       </div> /     {% empty %} /       <p class="text-muted">Товаров не найдено.</p> /     {% endfor %} /   </div> / {% endblock %}
+[/TABLE]
+[Normal] {% extends "base.html" %} — без имени приложения: шаблон лежит в общей папке templates/ проекта.
+[Normal] 8. Страница товара catalog/templates/catalog/product_detail.html:
+[TABLE]
+{% extends "base.html" %} / {% load static %} /  / {% block title %}{{ product.name }} — {{ block.super }}{% endblock %} /  / {% block content %} /   <nav class="mb-3"> /     <a href="{% url 'catalog:product_list' %}">Каталог</a> / /     <a href="{{ product.category.get_absolute_url }}">{{ product.category.name }}</a> /   </nav> /  /   <div class="row g-4"> /     <div class="col-md-6"> /       {% if product.image %} /         <img class="img-fluid w-100 product-photo" src="{{ product.image.url }}" alt="{{ product.name }}"> /       {% else %} /         <img class="img-fluid w-100 product-photo" src="{% static 'img/no-image.svg' %}" alt="Нет фото"> /       {% endif %} /     </div> /     <div class="col-md-6"> /       <h1 class="h3">{{ product.name }}</h1> /       <p class="price my-3">{{ product.price|floatformat:"-2g" }} ₽</p> /       {% if product.in_stock %} /         <p class="text-success">В наличии: {{ product.stock }} шт.</p> /       {% else %} /         <p class="text-danger">Нет в наличии</p> /       {% endif %} /       <p>{{ product.description|linebreaksbr }}</p> /     </div> /   </div> / {% endblock %}
+[/TABLE]
+[Normal] {% load static %} нужно повторить: подключённые библиотеки тегов не наследуются от base.html.
+[Normal] 9. Запустить python manage.py runserver и проверить: главная со всеми товарами, меню категорий, страница товара, хлебные крошки, /category/nope/ и /product/nope/ дают 404. В admin panel снять галочку «Показывать в каталоге» у одного товара: он пропал из витрины, а его страница отвечает 404.
+[Heading 1] Часть 6. Практика — фотографии товаров (≈10 мин)
+[Normal] 1. В admin panel открыть любой товар, в поле «Фото» выбрать картинку с компьютера (подойдёт любая .jpg или .png) и сохранить.
+[Normal] 2. Посмотреть, что произошло:
+[List Bullet] файл появился в папке media/products/ проекта;
+[List Bullet] в базе в поле image хранится только путь products/имя_файла.jpg, а не сам файл;
+[List Bullet] на витрине у товара фото, адрес картинки — /media/products/....
+[Normal] 3. Загрузить второй файл с тем же именем для другого товара. Django не перезапишет первый файл, а добавит к имени случайный суффикс.
+[Normal] 4. Попробовать загрузить в поле «Фото» не картинку (например, .txt, переименованный в .jpg). Pillow проверит содержимое, и admin panel покажет ошибку «Загрузите правильное изображение».
+[Heading 1] Часть 7. Практика — поиск, сортировка, постраничный вывод (≈25 мин)
+[Normal] Что делаем и зачем: покупатель ищет товар по названию, выбирает порядок сортировки и листает каталог по 8 товаров на странице. Все три параметра передаются в адресе и должны сочетаться между собой: /category/storage/?q=ssd&sort=cheap&page=2.
+[Normal] 1. Почему поиск через search_index. В лабораторной №0.1 мы видели: на SQLite icontains не учитывает регистр только для латиницы. Запрос «монитор» не найдёт «Монитор». Для магазина это неприемлемо, а итоговые проекты вы будете сдавать на SQLite. Решение, которое работает на любой СУБД: при каждом сохранении товара метод save() записывает в служебное поле search_index название и описание в нижнем регистре, а при поиске в нижний регистр переводится и запрос. Python, в отличие от SQLite, переводит в нижний регистр и кириллицу.
+[Normal] Ограничение подхода: массовые операции Product.objects.update(...) и bulk_create метод save() не вызывают, и search_index для таких записей не обновится. В PostgreSQL для поиска есть более мощные средства (полнотекстовый поиск django.contrib.postgres.search), но это тема следующих блоков.
+[Normal] 2. Заменить содержимое catalog/views.py:
+[TABLE]
+from django.core.paginator import Paginator / from django.shortcuts import get_object_or_404, render /  / from .models import Category, Product /  / PRODUCTS_PER_PAGE = 8 /  / # значение параметра ?sort= : (поле для order_by, подпись в списке) / SORT_OPTIONS = { /     "name": ("name", "По названию"), /     "cheap": ("price", "Сначала дешёвые"), /     "expensive": ("-price", "Сначала дорогие"), /     "new": ("-created_at", "Сначала новые"), / } /  /  / def product_list(request, category_slug=None): /     category = None /     products = Product.objects.filter(is_active=True).select_related("category") /     if category_slug: /         category = get_object_or_404(Category, slug=category_slug) /         products = products.filter(category=category) /  /     query = request.GET.get("q", "").strip() /     if query: /         products = products.filter(search_index__contains=query.lower()) /  /     sort = request.GET.get("sort", "name") /     if sort not in SORT_OPTIONS: /         sort = "name" /     products = products.order_by(SORT_OPTIONS[sort][0]) /  /     page = Paginator(products, PRODUCTS_PER_PAGE).get_page(request.GET.get("page")) /  /     context = { /         "category": category, /         "page": page, /         "query": query, /         "sort": sort, /         "sort_options": SORT_OPTIONS, /     } /     return render(request, "catalog/product_list.html", context) /  /  / def product_detail(request, slug): /     product = get_object_or_404( /         Product.objects.select_related("category"), slug=slug, is_active=True /     ) /     return render(request, "catalog/product_detail.html", {"product": product})
+[/TABLE]
+[TABLE]
+Элемент | Что означает
+SORT_OPTIONS | белый список сортировок. Значение из адреса не передаётся в order_by напрямую: иначе пользователь мог бы отсортировать по любому полю, включая служебные, или вызвать ошибку 500 несуществующим полем
+Paginator(products, 8) | делит выборку на страницы. В SQL это LIMIT 8 OFFSET ...: из базы читаются только товары текущей страницы
+get_page(...) | безопасно получить страницу: для ?page=abc вернёт первую, для ?page=999 — последнюю, без ошибок
+page | объект страницы: по нему можно итерироваться в шаблоне, у него есть number, has_next, paginator.count и т.д.
+[/TABLE]
+[Normal] 3. Заменить содержимое catalog/templates/catalog/product_list.html:
+[TABLE]
+{% extends "base.html" %} /  / {% block title %}{{ category.name|default:"Каталог" }} — {{ block.super }}{% endblock %} /  / {% block content %} /   <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3"> /     <h1 class="h3 mb-0"> /       {{ category.name|default:"Все товары" }} /       {% if query %}<small class="text-muted">: поиск «{{ query }}»</small>{% endif %} /     </h1> /     <form method="get" class="d-flex gap-2"> /       {% if query %}<input type="hidden" name="q" value="{{ query }}">{% endif %} /       <select class="form-select form-select-sm" name="sort"> /         {% for value, option in sort_options.items %} /           <option value="{{ value }}" {% if value == sort %}selected{% endif %}>{{ option.1 }}</option> /         {% endfor %} /       </select> /       <button class="btn btn-sm btn-outline-secondary" type="submit">Применить</button> /     </form> /   </div> /   {% if category.description %} /     <p class="text-muted">{{ category.description }}</p> /   {% endif %} /  /   <p class="text-muted small">Найдено товаров: {{ page.paginator.count }}</p> /  /   <div class="row row-cols-1 row-cols-sm-2 row-cols-lg-4 g-3"> /     {% for product in page %} /       <div class="col"> /         {% include "catalog/_product_card.html" %} /       </div> /     {% empty %} /       <p class="text-muted">Товаров не найдено.</p> /     {% endfor %} /   </div> /  /   {% if page.has_other_pages %} /     <nav class="mt-4"> /       <ul class="pagination"> /         {% if page.has_previous %} /           <li class="page-item"><a class="page-link" href="{% querystring page=page.previous_page_number %}">←</a></li> /         {% endif %} /         {% for number in page.paginator.page_range %} /           <li class="page-item {% if number == page.number %}active{% endif %}"> /             <a class="page-link" href="{% querystring page=number %}">{{ number }}</a> /           </li> /         {% endfor %} /         {% if page.has_next %} /           <li class="page-item"><a class="page-link" href="{% querystring page=page.next_page_number %}">→</a></li> /         {% endif %} /       </ul> /     </nav> /   {% endif %} / {% endblock %}
+[/TABLE]
+[Normal] Тег {% querystring %} (есть в Django начиная с версии 5.1) берёт текущие параметры адреса и меняет только указанный. Если пользователь на странице ?q=ssd&sort=cheap, ссылка {% querystring page=2 %} превратится в ?q=ssd&sort=cheap&page=2: поиск и сортировка не теряются при листании. Раньше для этого приходилось писать собственный тег.
+[Normal] Скрытое поле q в форме сортировки нужно по той же причине: форма с method="get" отправляет только свои поля, и без него смена сортировки сбросила бы поиск.
+[Normal] 4. Проверить:
+[List Bullet] монитор, МОНИТОР и Монитор 27 находят мониторы;
+[List Bullet] сортировка «Сначала дорогие» на второй странице продолжает тот же порядок;
+[List Bullet] поиск + сортировка + переход на страницу 2 сохраняют все параметры в адресе;
+[List Bullet] ?page=abc и ?page=999 не дают ошибок;
+[List Bullet] ?sort=password спокойно сортирует по названию.
+[Normal] 5. Сломать и починить. Временно заменить в product_list поиск на products.filter(name__icontains=query) и поискать монитор строчными буквами: не найдёт. Вернуть search_index.
+[Heading 1] Часть 8. Практика — тесты каталога (≈15 мин)
+[Normal] 1. catalog/tests.py:
+[TABLE]
+from decimal import Decimal /  / from django.db import IntegrityError / from django.test import TestCase / from django.urls import reverse /  / from .models import Category, Product /  /  / class CatalogTests(TestCase): /     @classmethod /     def setUpTestData(cls): /         cls.monitors = Category.objects.create(name="Мониторы", slug="monitors") /         cls.storage = Category.objects.create(name="Накопители", slug="storage") /         cls.monitor = Product.objects.create( /             category=cls.monitors, name="Монитор 27 дюймов", slug="monitor-27", /             price=Decimal("21990"), stock=5, /         ) /         cls.ssd = Product.objects.create( /             category=cls.storage, name="SSD 1 ТБ", slug="ssd-1tb", /             price=Decimal("7490"), stock=0, /         ) /         cls.hidden = Product.objects.create( /             category=cls.monitors, name="Снятый с продажи монитор", slug="hidden", /             price=Decimal("1000"), is_active=False, /         ) /  /     def test_inactive_product_is_hidden(self): /         response = self.client.get(reverse("catalog:product_list")) /         self.assertContains(response, self.monitor.name) /         self.assertNotContains(response, self.hidden.name) /         response = self.client.get(self.hidden.get_absolute_url()) /         self.assertEqual(response.status_code, 404) /  /     def test_category_filter(self): /         response = self.client.get(self.storage.get_absolute_url()) /         self.assertContains(response, self.ssd.name) /         self.assertNotContains(response, self.monitor.name) /  /     def test_search_ignores_case(self): /         response = self.client.get(reverse("catalog:product_list"), {"q": "МОНИТОР"}) /         self.assertContains(response, self.monitor.name) /         self.assertNotContains(response, self.ssd.name) /  /     def test_product_page_shows_stock(self): /         response = self.client.get(self.ssd.get_absolute_url()) /         self.assertContains(response, "Нет в наличии") /  /     def test_pagination(self): /         for number in range(10): /             Product.objects.create( /                 category=self.storage, name=f"Флешка {number}", slug=f"flash-{number}", /                 price=Decimal("500"), /             ) /         response = self.client.get(reverse("catalog:product_list"), {"page": 2}) /         self.assertEqual(response.context["page"].number, 2) /         self.assertEqual(len(response.context["page"].object_list), 4) /  /     def test_price_must_be_positive(self): /         with self.assertRaises(IntegrityError): /             Product.objects.create( /                 category=self.storage, name="Бесплатно", slug="free", price=Decimal("0") /             )
+[/TABLE]
+[Normal] response.context — словарь, который view передал в шаблон. Через него удобно проверять не HTML, а сами данные: номер страницы и количество товаров на ней. В тесте пагинации активных товаров 12 (2 + 10), значит на второй странице 4.
+[Normal] 2. Запустить:
+[TABLE]
+python manage.py test catalog
+[/TABLE]
+[Normal] Ожидаемый результат: Ran 6 tests ... OK. Сделать коммит.
+[Heading 1] Часть 9. Частые проблемы
+[TABLE]
+Симптом | Причина и решение
+Cannot use ImageField because Pillow is not installed | не установлен Pillow или установлен не в то окружение: python -m pip install pillow при активированном venv
+InconsistentMigrationHistory: Migration admin.0001_initial is applied before its dependency accounts.0001_initial | migrate запустили до создания миграции accounts. На учебном проекте: удалить db.sqlite3, выполнить makemigrations accounts и migrate заново
+NoReverseMatch: 'catalog' is not a registered namespace | в catalog/urls.py нет app_name = "catalog" или приложение не подключено через include в config/urls.py
+TemplateDoesNotExist: base.html | не указан "DIRS": [BASE_DIR / "templates"] в настройках или base.html лежит не в папке templates/ в корне проекта
+Invalid block tag ... 'static' | в шаблоне нет {% load static %}. Его нужно писать в каждом шаблоне, где используется тег, даже если он есть в base.html
+Стили из shop.css не применились, в консоли браузера 404 на /static/css/shop.css | нет STATICFILES_DIRS или файл лежит не в static/css/. Если правили CSS, а браузер показывает старый вид, обновить страницу с очисткой кеша: Ctrl+F5 (macOS: Cmd+Shift+R)
+Фото загружено, но на сайте «битая» картинка, /media/... отвечает 404 | в config/urls.py не добавлен static(settings.MEDIA_URL, ...) или DEBUG = False
+Поиск не находит товары, добавленные через update() или bulk_create | эти методы не вызывают save(), search_index пустой. Пересохранить: for p in Product.objects.all(): p.save() в shell
+IntegrityError: UNIQUE constraint failed: catalog_product.slug | два товара с одинаковым slug. Slug должен быть уникальным
+ProtectedError при удалении категории | в категории есть товары (on_delete=PROTECT). Сначала перенести или удалить товары
+TypeError: CheckConstraint.__init__() got an unexpected keyword argument 'check' | пример из старой версии Django. В Django 6 параметр называется condition
+TemplateSyntaxError: Invalid block tag 'querystring' | Django старее 5.1. Проверить python -m django --version и обновить
+[/TABLE]
+[Heading 1] Часть 10. Итог (≈10 мин)
+[Heading 2] Чек-лист сдачи
+[List Bullet] ☐ Проект shop в отдельной папке со своим venv, requirements.txt содержит Django и Pillow
+[List Bullet] ☐ Своя модель пользователя accounts.User создана до первого migrate
+[List Bullet] ☐ Модели Category и Product, ограничение цены в базе данных, admin panel с редактированием в списке
+[List Bullet] ☐ Команда python manage.py seed_catalog заполняет каталог и не создаёт дублей при повторном запуске
+[List Bullet] ☐ Общий templates/base.html, свои стили в static/, меню категорий через контекстный процессор
+[List Bullet] ☐ Список товаров (все и по категории) и страница товара; скрытые товары недоступны
+[List Bullet] ☐ У нескольких товаров загружены фото, у остальных показывается заглушка
+[List Bullet] ☐ Поиск без учёта регистра (и для кириллицы), сортировка, постраничный вывод; параметры сохраняются при переходах
+[List Bullet] ☐ python manage.py test catalog — 6 тестов проходят
+[List Bullet] ☐ В Git несколько осмысленных коммитов, media/ и db.sqlite3 в репозиторий не попали
+[Heading 2] Контрольные вопросы
+[Normal] 1. Зачем делить проект на несколько приложений? Зачем приложению app_name?
+[Normal] 2. Чем статические файлы отличаются от медиафайлов? Почему media/ не хранят в Git?
+[Normal] 3. Почему свою модель пользователя создают до первого migrate, даже если она пустая?
+[Normal] 4. Почему цены хранят в DecimalField, а не во FloatField?
+[Normal] 5. Чем validators в поле модели отличаются от CheckConstraint в Meta?
+[Normal] 6. Что такое идемпотентная команда и почему seed_catalog должна быть идемпотентной?
+[Normal] 7. Что делает контекстный процессор? Приведите ещё один пример данных, которые удобно передавать через него.
+[Normal] 8. Почему значение ?sort= нельзя передавать в order_by напрямую?
+[Normal] 9. Как {% querystring %} помогает сохранить поиск и сортировку при листании?
+[Normal] 10. Почему для поиска понадобилось поле search_index? Какие у этого решения ограничения?
+[Heading 2] Дополнительные задания (по желанию)
+[List Bullet] Фильтр по цене «от» и «до» в форме над каталогом, с проверкой, что «от» не больше «до».
+[List Bullet] Несколько фото у товара: модель ProductImage (товар, фото, порядок), вывод галереи на странице товара, TabularInline в admin panel.
+[List Bullet] Главная страница с блоками «Новинки» (последние 4 товара) и «Есть в наличии».
+[List Bullet] Счётчик товаров в меню категорий («Мониторы (4)») через annotate(Count(...)) в контекстном процессоре, одним SQL-запросом.
+[Heading 2] Что дальше
+[Normal] В лабораторной №0.3 витрина превращается в работающий магазин: корзина в сессии, регистрация покупателей, оформление заказа со списанием остатков в одной транзакции, личный кабинет с историей заказов и панель менеджера. В конце лабораторной №0.3 — итоговое самостоятельное задание по вариантам.

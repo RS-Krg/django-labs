@@ -2,16 +2,18 @@
 
 ## Запуск на Windows
 
+Из папки `C:\Django_Labs` (или из корня клонированного репозитория):
+
 ```powershell
-cd helpdesk
+cd .\helpdesk
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe manage.py migrate
 .\.venv\Scripts\python.exe manage.py seed_demo
-.\.venv\Scripts\python.exe manage.py runserver
+.\.venv\Scripts\python.exe manage.py runserver 8003
 ```
 
-Открыть http://127.0.0.1:8000/. Тесты: `.\.venv\Scripts\python.exe manage.py test`.
+Открыть http://127.0.0.1:8003/. Если вы уже находитесь в папке `helpdesk`, строку `cd .\helpdesk` пропустите. Это сайт заявок ИТ-отдела, а не магазин. Для остановки сервера нажмите `Ctrl+C` в том же окне PowerShell. Тесты: `.\.venv\Scripts\python.exe manage.py test`.
 
 ## Учётные записи и возможности
 

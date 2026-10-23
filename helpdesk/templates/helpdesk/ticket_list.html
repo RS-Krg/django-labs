@@ -1,15 +1,15 @@
 {% extends "helpdesk/base.html" %}
 {% block title %}Список заявок — {{ block.super }}{% endblock %}
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3"><h1 class="h3 mb-0">Заявки</h1><a class="btn btn-primary" href="{% url 'ticket_create' %}">Новая заявка</a></div>
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3"><h1 class="h3 mb-0">Заявки</h1><a class="btn btn-primary" href="{% url 'ticket_create' %}">Новая заявка</a></div>
 <form method="get" class="row g-2 mb-3">
   <div class="col-md-6"><input class="form-control" type="search" name="q" value="{{ query }}" placeholder="Поиск по теме, автору, описанию"></div>
   <div class="col-md-4"><select class="form-select" name="status"><option value="">Все статусы</option>{% for value, label in statuses %}<option value="{{ value }}" {% if value == status %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
   <div class="col-md-2"><button class="btn btn-outline-secondary w-100" type="submit">Найти</button></div>
 </form>
 <p class="text-muted">Найдено заявок: {{ tickets|length }}</p>
-<table class="table table-hover"><thead><tr><th>№</th><th>Тема</th><th>Категория</th><th>Приоритет</th><th>Статус</th><th>Исполнитель</th><th>Создана</th></tr></thead><tbody>
-{% for ticket in tickets %}<tr><td>{{ ticket.pk }}</td><td><a href="{{ ticket.get_absolute_url }}">{{ ticket.title }}</a></td><td>{{ ticket.category|default:"—" }}</td><td>{{ ticket.get_priority_display }}</td><td>{{ ticket.get_status_display }}</td><td>{{ ticket.assignee|default:"—" }}</td><td>{{ ticket.created_at|date:"d.m.Y H:i" }}</td></tr>
+<div class="table-wrap"><table class="table table-hover"><thead><tr><th>№</th><th>Тема</th><th>Категория</th><th>Приоритет</th><th>Статус</th><th>Исполнитель</th><th>Создана</th></tr></thead><tbody>
+{% for ticket in tickets %}<tr><td>{{ ticket.pk }}</td><td><a href="{{ ticket.get_absolute_url }}">{{ ticket.title }}</a></td><td>{{ ticket.category|default:"—" }}</td><td>{{ ticket.get_priority_display }}</td><td><span class="status-pill">{{ ticket.get_status_display }}</span></td><td>{{ ticket.assignee|default:"—" }}</td><td>{{ ticket.created_at|date:"d.m.Y H:i" }}</td></tr>
 {% empty %}<tr><td colspan="7" class="text-center text-muted">Заявок нет</td></tr>{% endfor %}
-</tbody></table>
+</tbody></table></div>
 {% endblock %}

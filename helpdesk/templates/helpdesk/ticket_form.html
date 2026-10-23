@@ -1,5 +1,5 @@
 {% extends "helpdesk/base.html" %}
 {% block title %}{{ page_title }} — {{ block.super }}{% endblock %}
 {% block content %}
-<div class="row"><div class="col-md-8"><h1 class="h3 mb-3">{{ page_title }}</h1><form method="post" novalidate>{% csrf_token %}{% include "helpdesk/_form_fields.html" %}<button class="btn btn-primary" type="submit">Сохранить</button><a class="btn btn-link" href="{% url 'ticket_list' %}">Отмена</a></form></div></div>
+<div class="row"><div class="col-md-8"><div class="surface-panel"><h1 class="h3 mb-3">{{ page_title }}</h1><form method="post" novalidate>{% csrf_token %}{% include "helpdesk/_form_fields.html" %}<button class="btn btn-primary" type="submit">Сохранить</button><a class="btn btn-link" href="{% url 'ticket_list' %}">Отмена</a></form></div></div></div>
 {% endblock %}

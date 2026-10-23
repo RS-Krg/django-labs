@@ -1,11 +1,11 @@
 {% extends "helpdesk/base.html" %}
 {% block title %}Вход — {{ block.super }}{% endblock %}
 {% block content %}
-<div class="row justify-content-center"><div class="col-md-5"><h1 class="h3 mb-3">Вход в систему</h1>
+<div class="row justify-content-center"><div class="col-md-5"><div class="surface-panel"><h1 class="h3 mb-3">Вход в систему</h1>
 {% if form.errors %}<div class="alert alert-danger">Неверное имя пользователя или пароль.</div>{% endif %}
 <form method="post">{% csrf_token %}
   <div class="mb-3"><label class="form-label" for="id_username">Имя пользователя</label><input class="form-control" type="text" name="username" id="id_username" value="{{ form.username.value|default:'' }}" autofocus required></div>
   <div class="mb-3"><label class="form-label" for="id_password">Пароль</label><input class="form-control" type="password" name="password" id="id_password" required></div>
   <input type="hidden" name="next" value="{{ next }}"><button class="btn btn-primary" type="submit">Войти</button>
-</form></div></div>
+</form></div></div></div>
 {% endblock %}

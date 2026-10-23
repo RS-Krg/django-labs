@@ -1,9 +1,22 @@
 {% extends "base.html" %}
 {% block title %}{{ category.name|default:"Каталог" }} — {{ block.super }}{% endblock %}
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3"><h1 class="h3">{{ category.name|default:"Все товары" }}</h1><form method="get" class="d-flex gap-2">{% if query %}<input type="hidden" name="q" value="{{ query }}">{% endif %}<select class="form-select" name="sort">{% for value, option in sort_options.items %}<option value="{{ value }}" {% if value == sort %}selected{% endif %}>{{ option.1 }}</option>{% endfor %}</select><button class="btn btn-outline-secondary" type="submit">Применить</button></form></div>
-{% if category.description %}<p class="text-muted">{{ category.description }}</p>{% endif %}
-<p class="text-muted small">Найдено товаров: {{ page.paginator.count }}</p>
-<div class="row row-cols-1 row-cols-sm-2 row-cols-lg-4 g-3">{% for product in page %}<div class="col">{% include "catalog/_product_card.html" %}</div>{% empty %}<p>Товаров не найдено.</p>{% endfor %}</div>
-{% if page.has_other_pages %}<nav class="mt-4"><ul class="pagination">{% if page.has_previous %}<li class="page-item"><a class="page-link" href="{% querystring page=page.previous_page_number %}">←</a></li>{% endif %}{% for number in page.paginator.page_range %}<li class="page-item {% if number == page.number %}active{% endif %}"><a class="page-link" href="{% querystring page=number %}">{{ number }}</a></li>{% endfor %}{% if page.has_next %}<li class="page-item"><a class="page-link" href="{% querystring page=page.next_page_number %}">→</a></li>{% endif %}</ul></nav>{% endif %}
+<section class="catalog-heading">
+  <div>
+    <h1 class="h3">{{ category.name|default:"Все товары" }}</h1>
+    {% if category.description %}<p class="text-muted mb-0">{{ category.description }}</p>{% endif %}
+  </div>
+  <form method="get" class="catalog-filters">
+    {% if query %}<input type="hidden" name="q" value="{{ query }}">{% endif %}
+
+    <select class="form-select" name="sort" aria-label="Сортировка">{% for value, option in sort_options.items %}<option value="{{ value }}" {% if value == sort %}selected{% endif %}>{{ option.1 }}</option>{% endfor %}</select>
+    <button class="btn btn-outline-secondary" type="submit">Применить</button>
+  </form>
+</section>
+<p class="text-muted small mb-3">Найдено товаров: {{ page.paginator.count }}</p>
+<div class="row row-cols-1 row-cols-sm-2 row-cols-lg-4 g-4">
+  {% for product in page %}<div class="col">{% include "catalog/_product_card.html" %}</div>
+  {% empty %}<div class="col-12"><div class="empty-state">Товаров не найдено. Попробуйте изменить поиск или фильтры.</div></div>{% endfor %}
+</div>
+{% if page.has_other_pages %}<nav class="mt-4" aria-label="Страницы каталога"><ul class="pagination flex-wrap">{% if page.has_previous %}<li class="page-item"><a class="page-link" href="{% querystring page=page.previous_page_number %}" aria-label="Предыдущая страница">←</a></li>{% endif %}{% for number in page.paginator.page_range %}<li class="page-item {% if number == page.number %}active{% endif %}"><a class="page-link" href="{% querystring page=number %}" {% if number == page.number %}aria-current="page"{% endif %}>{{ number }}</a></li>{% endfor %}{% if page.has_next %}<li class="page-item"><a class="page-link" href="{% querystring page=page.next_page_number %}" aria-label="Следующая страница">→</a></li>{% endif %}</ul></nav>{% endif %}
 {% endblock %}

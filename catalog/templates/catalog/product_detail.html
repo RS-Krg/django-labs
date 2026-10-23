@@ -1,3 +1,24 @@
 {% extends "base.html" %}{% load static %}
 {% block title %}{{ product.name }} — {{ block.super }}{% endblock %}
-{% block content %}<a href="{{ product.category.get_absolute_url }}">← {{ product.category.name }}</a><div class="row mt-3"><div class="col-md-5"><img class="img-fluid product-photo" src="{% if product.image %}{{ product.image.url }}{% else %}{% static 'img/no-image.svg' %}{% endif %}" alt="{{ product.name }}"></div><div class="col-md-7"><h1 class="h3">{{ product.name }}</h1><p>{{ product.description|linebreaksbr }}</p><p class="price">{{ product.price|floatformat:"-2g" }} ₽</p>{% if product.in_stock %}<p class="text-success">В наличии: {{ product.stock }}</p><form class="d-flex gap-2 mb-3" method="post" action="{% url 'cart:add' product.pk %}">{% csrf_token %}<input class="form-control" type="number" name="quantity" value="1" min="1" max="{{ product.stock }}"><button class="btn btn-primary" type="submit">В корзину</button></form>{% else %}<p class="text-danger">Нет в наличии</p>{% endif %}</div></div>{% endblock %}
+{% block content %}
+<a class="small" href="{{ product.category.get_absolute_url }}">← {{ product.category.name }}</a>
+<div class="row g-4 mt-1">
+  <div class="col-lg-5"><div class="product-photo-wrap"><img class="product-photo" src="{% if product.image %}{{ product.image.url }}{% else %}{% static 'img/no-image.svg' %}{% endif %}" alt="{{ product.name }}"></div></div>
+  <div class="col-lg-7">
+    <div class="surface-panel h-100">
+      <p class="text-muted small mb-2">{{ product.category.name }}</p>
+      <h1 class="h2">{{ product.name }}</h1>
+      <p class="text-muted">{{ product.description|linebreaksbr }}</p>
+      <p class="price mb-4">{{ product.price|floatformat:"-2g" }} ₽</p>
+      {% if product.in_stock %}
+        <p class="text-success small">В наличии: {{ product.stock }}</p>
+        <form class="variant-row d-flex flex-wrap gap-2" method="post" action="{% url 'cart:add' product.pk %}">
+          {% csrf_token %}
+          <input class="form-control" type="number" name="quantity" value="1" min="1" max="{{ product.stock }}" aria-label="Количество">
+          <button class="btn btn-primary" type="submit">В корзину</button>
+        </form>
+      {% else %}<p class="text-danger">Нет в наличии</p>{% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

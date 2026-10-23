@@ -40,9 +40,25 @@ SPORTS = {
 
 DEMO_IMAGES = {
     'tempo-shoes': 'tempo-shoes.png',
+    'sprint-shoes': 'sprint-shoes.png',
+    'dryfit-shirt': 'dryfit-shirt.png',
+    'flow-shorts': 'flow-shorts.png',
     'wind-jacket': 'wind-jacket.png',
+    'flex-leggings': 'flex-leggings.png',
+    'motion-top': 'motion-top.png',
+    'grip-gloves': 'grip-gloves.png',
+    'core-belt': 'core-belt.png',
+    'training-tank': 'training-tank.png',
     'trail-boots': 'trail-boots.png',
     'striker-boots': 'striker-boots.png',
+    'field-boots': 'field-boots.png',
+    'club-kit': 'club-kit.png',
+    'match-socks': 'match-socks.png',
+    'save-gloves': 'save-gloves.png',
+    'alpine-jacket': 'alpine-jacket.png',
+    'trek-backpack': 'trek-backpack.png',
+    'base-thermal': 'base-thermal.png',
+    'trek-socks': 'trek-socks.png',
 }
 
 
